@@ -1,0 +1,163 @@
+.minecraft-structure-viewer {
+  position: relative;
+  min-height: 440px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 13px;
+  background: radial-gradient(circle at 50% 8%, rgba(103, 155, 255, 0.2), transparent 51%), #edf3fa;
+  isolation: isolate;
+}
+
+.minecraft-structure-viewer:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.minecraft-viewer-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.minecraft-viewer-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: 0;
+}
+
+.minecraft-viewer-canvas[data-loading='true']::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 26px;
+  color: #52647c;
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-align: center;
+  content: attr(data-loading-label);
+  background: rgba(237, 243, 250, 0.32);
+  pointer-events: none;
+}
+
+.minecraft-viewer-canvas[data-error='true'] {
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  color: #9a650f;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.minecraft-viewer-toolbar {
+  position: absolute;
+  top: 13px;
+  right: 13px;
+  left: 13px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.minecraft-viewer-toolbar-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 4px;
+  border: 1px solid rgba(198, 211, 230, 0.9);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 18px rgba(53, 76, 112, 0.08);
+  backdrop-filter: blur(9px);
+  pointer-events: auto;
+}
+
+.minecraft-viewer-toolbar button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 8px;
+  color: #43566f;
+  font: inherit;
+  font-size: 0.69rem;
+  font-weight: 760;
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.minecraft-viewer-toolbar button:hover,
+.minecraft-viewer-toolbar button:focus-visible {
+  color: var(--blue);
+  outline: 0;
+  background: #edf3ff;
+}
+
+.minecraft-viewer-guidance,
+.minecraft-viewer-status {
+  position: absolute;
+  bottom: 13px;
+  padding: 7px 10px;
+  font-size: 0.7rem;
+  font-weight: 690;
+  border: 1px solid rgba(198, 211, 230, 0.84);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 6px 16px rgba(53, 76, 112, 0.06);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.minecraft-viewer-guidance { left: 13px; color: #5e6d82; }
+.minecraft-viewer-status { right: 13px; color: #5e6d82; }
+.minecraft-viewer-status-textured { color: #1d7854; border-color: rgba(116, 207, 161, 0.58); background: rgba(234, 250, 240, 0.85); }
+.minecraft-viewer-status-loading { color: #356bbd; border-color: rgba(134, 169, 240, 0.64); background: rgba(239, 246, 255, 0.88); }
+.minecraft-viewer-status-fallback { color: #9a650f; border-color: rgba(235, 193, 113, 0.7); background: rgba(255, 248, 231, 0.9); }
+
+.minecraft-viewer-empty {
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  padding: 26px;
+  color: #708097;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  text-align: center;
+  border: 1px dashed #c8d4e6;
+  border-radius: 13px;
+  background: #fafcff;
+}
+
+.theme-dark .minecraft-structure-viewer { background: radial-gradient(circle at 50% 8%, rgba(102, 153, 255, 0.2), transparent 51%), #101a29; }
+.theme-dark .minecraft-viewer-canvas[data-loading='true']::after { color: #c3d2e8; background: rgba(16, 26, 41, 0.4); }
+.theme-dark .minecraft-viewer-canvas[data-error='true'] { color: #efcb81; }
+.theme-dark .minecraft-viewer-toolbar-group,
+.theme-dark .minecraft-viewer-guidance,
+.theme-dark .minecraft-viewer-status { border-color: rgba(77, 107, 145, 0.88); background: rgba(20, 35, 54, 0.84); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2); }
+.theme-dark .minecraft-viewer-toolbar button,
+.theme-dark .minecraft-viewer-guidance,
+.theme-dark .minecraft-viewer-status { color: #c4d4e9; }
+.theme-dark .minecraft-viewer-toolbar button:hover,
+.theme-dark .minecraft-viewer-toolbar button:focus-visible { color: #e5efff; background: #273e5d; }
+.theme-dark .minecraft-viewer-status-textured { color: #97e5bb; background: rgba(21, 65, 48, 0.84); }
+.theme-dark .minecraft-viewer-status-loading { color: #a9c9ff; background: rgba(29, 57, 99, 0.86); }
+.theme-dark .minecraft-viewer-status-fallback { color: #efcf8f; background: rgba(78, 57, 25, 0.88); }
+.theme-dark .minecraft-viewer-empty { color: #b8c7da; border-color: #435a78; background: #19293d; }
+
+@media (max-width: 760px) {
+  .minecraft-structure-viewer { min-height: 340px; }
+  .minecraft-viewer-toolbar { align-items: stretch; flex-direction: column; }
+  .minecraft-viewer-toolbar-group { justify-content: center; }
+  .minecraft-viewer-toolbar-actions { align-self: flex-end; }
+  .minecraft-viewer-guidance { right: 12px; bottom: 48px; left: 12px; text-align: center; }
+  .minecraft-viewer-status { right: 12px; bottom: 12px; left: 12px; text-align: center; }
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useRef, useState } from 'react'
 import { Boxes, Download, ImagePlus, ScanEye, Sparkles } from 'lucide-react'
 import { GEMINI_MODELS, imageToRecipe, localPromptToRecipe } from './ai/gemini'
 import { validateRecipe, type Recipe } from './ai/schema'
@@ -7,10 +7,14 @@ import { applyInteriorOps, buildInteriorOps, type InteriorOptions } from './voxe
 import { gridToNbt, placementGuide, type NbtPart } from './voxel/nbt'
 import { gridToViewer } from './voxel/viewer'
 import type { ViewerModel } from './generator/viewerTypes'
-import { StructureViewer } from './components/StructureViewer'
 import { RecipePanel } from './components/RecipePanel'
 import { InteriorPanel } from './components/InteriorPanel'
 import './App.css'
+
+const MinecraftStructureViewer = lazy(async () => {
+  const module = await import('./components/MinecraftStructureViewer')
+  return { default: module.MinecraftStructureViewer }
+})
 
 export default function App() {
   const [tab, setTab] = useState<'image' | 'local'>('image')
@@ -20,6 +24,8 @@ export default function App() {
   const [localDesc, setLocalDesc] = useState('Una torre moderna blanca de 10 pisos con base comercial y corona abierta')
   const [image, setImage] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
+  const [viewerAssetFile, setViewerAssetFile] = useState<File | null>(null)
+  const viewerAssetInputRef = useRef<HTMLInputElement>(null)
 
   const [recipeText, setRecipeText] = useState('')
   const [grid, setGrid] = useState<VoxelGrid | null>(null)
@@ -287,10 +293,39 @@ export default function App() {
             </div>
           </div>
           {viewer && viewer.states.length ? (
-            <StructureViewer model={viewer} theme="dark" />
+            <Suspense fallback={<div className="empty">Cargando visor 3D…</div>}>
+              <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
+            </Suspense>
           ) : (
             <div className="empty">Genera la receta para ver la base aquí.</div>
           )}
+          <div className="assets-row">
+            <div className="assets-info">
+              <span>Texturas: {viewerAssetFile ? viewerAssetFile.name : 'vista simplificada'}</span>
+              <small>{viewerAssetFile ? 'Modelos y texturas reales del juego' : 'Sube tu client.jar para ver texturas reales'}</small>
+            </div>
+            <div className="assets-actions">
+              <button type="button" className="ghost" onClick={() => viewerAssetInputRef.current?.click()}>
+                {viewerAssetFile ? 'Cambiar client.jar' : 'Cargar client.jar'}
+              </button>
+              {viewerAssetFile && (
+                <button type="button" className="ghost" onClick={() => setViewerAssetFile(null)}>
+                  Quitar
+                </button>
+              )}
+              <input
+                ref={viewerAssetInputRef}
+                type="file"
+                accept=".jar,.zip"
+                className="visually-hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (f) setViewerAssetFile(f)
+                }}
+              />
+            </div>
+          </div>
           {!!palette.length && (
             <div className="palette">Paleta: {palette.join(', ')}</div>
           )}
