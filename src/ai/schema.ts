@@ -22,6 +22,30 @@ export type ShellOp =
       z0?: number
       z1?: number
     }
+  | {
+      op: 'custom_windows'
+      face: Face | Face[]
+      /** Región del volumen (fachada). */
+      x0?: number
+      x1?: number
+      z0?: number
+      z1?: number
+      /** Primera fila del fuste, nº de pisos y alto por piso. */
+      shaftY0: number
+      floors: number
+      floorH: number
+      /** Separación horizontal entre ventanas (del template). */
+      gap: number
+      /** Filas de muro sobre la losa antes de la ventana. */
+      sill: number
+      /**
+       * Pixel-art por ventana (filas de arriba hacia abajo).
+       * 'G' vidrio, 'W' muro, '.' no tocar. Ancho = nº de columnas.
+       */
+      pattern: string[][]
+      wall: string
+      glass: string
+    }
   | { op: 'column'; x: number; z: number; y0: number; y1: number; block: string }
   | { op: 'stairs_run'; from: Vec3; direction: '+x' | '-x' | '+z' | '-z'; steps: number; block: string }
   | { op: 'roof_gable'; y: number; block: string; from?: [number, number]; to?: [number, number] }

@@ -1,4 +1,5 @@
 import type { Recipe, ShellOp, Vec3 } from '../ai/schema'
+import type { VoxelGrid } from '../voxel/interpreter'
 import type { Building, FacadeFaceName, Volume } from './types'
 import { FACADE_FACES } from './types'
 
@@ -202,9 +203,20 @@ export function compileBuilding(b: Building): CompileResult {
         )
       }
       if (b.floors.slab) {
+        // Piso solo interior (no toca el contorno) o huella completa.
+        const inset = b.floors.inset && w >= 3 && d >= 3
+        if (b.floors.inset && (w < 3 || d < 3)) {
+          warnings.push(`"${vol.name}": muy angosto para piso interior, se usa huella completa.`)
+        }
         for (let f = 0; f < actual; f++) {
           const slabY = shaftY0 + f * fh
-          ops.push({ op: 'floor_slab', y: slabY, block: use(b.floors.slabBlock), from: [v.x0, v.z0], to: [v.x1, v.z1] })
+          ops.push({
+            op: 'floor_slab',
+            y: slabY,
+            block: use(b.floors.slabBlock),
+            from: inset ? [v.x0 + 1, v.z0 + 1] : [v.x0, v.z0],
+            to: inset ? [v.x1 - 1, v.z1 - 1] : [v.x1, v.z1],
+          })
         }
       }
       // Ventanas por cara (frente+atrás comparten patrón X, laterales el Z).
@@ -231,12 +243,32 @@ export function compileBuilding(b: Building): CompileResult {
       // Solo agrupamos si comparten parámetros (mismo vidrio, w y gap).
       const keyOf = (f: (typeof hPair)[number] | (typeof vPair)[number]) => {
         const face = b.facade[f]
-        return face.pattern === 'ribbon' ? `r|${face.glass}|${face.sill}` : `${face.windowW}|${face.gapX}|${face.glass}|${face.sill}`
+        if (face.pattern === 'ribbon') return `r|${face.glass}|${face.sill}`
+        const custom = face.custom?.length ? JSON.stringify(face.custom) : ''
+        return `${face.windowW}|${face.gapX}|${face.glass}|${face.sill}|${custom}`
       }
       const pushGroup = (faces: Array<'front' | 'back' | 'left' | 'right'>) => {
         if (!faces.length) return
         const rep = b.facade[faces[0]]
         const ribbon = rep.pattern === 'ribbon'
+        const custom = !ribbon && rep.custom?.length ? rep.custom : null
+        const region = { x0: v.x0, x1: v.x1, z0: v.z0, z1: v.z1 }
+        if (custom) {
+          ops.push({
+            op: 'custom_windows',
+            face: faces.length === 1 ? faces[0] : (faces as Array<'front' | 'back' | 'left' | 'right'>),
+            ...region,
+            shaftY0,
+            floors: actual,
+            floorH: fh,
+            sill: Math.min(rep.sill, fh - 1),
+            gap: Math.max(0, rep.gapX),
+            pattern: custom,
+            wall: use(rep.wall),
+            glass: use(rep.glass),
+          })
+          return
+        }
         ops.push({
           op: 'grid_windows',
           face: faces.length === 1 ? faces[0] : (faces as Array<'front' | 'back' | 'left' | 'right'>),
@@ -245,10 +277,7 @@ export function compileBuilding(b: Building): CompileResult {
           w: ribbon ? 99 : Math.max(1, rep.windowW),
           gap: ribbon ? 0 : Math.max(0, rep.gapX),
           block: use(rep.glass),
-          x0: v.x0,
-          x1: v.x1,
-          z0: v.z0,
-          z1: v.z1,
+          ...region,
         })
       }
       // Agrupa frente+atrás si coinciden, si no por separado (rara vez).
@@ -315,4 +344,36 @@ export function compileBuilding(b: Building): CompileResult {
     warnings,
     stats: { volumes: boxes.length, floorsBuilt, floorsRequested: b.floors.count, ops: ops.length, size },
   }
+}
+
+/**
+ * Quita paredes internas: todo bloque con sus 6 vecinos ocupados se vacía.
+ * Une cubos pegados en un solo interior hueco. Una sola pasada (dos fases)
+ * para no colapsar muros de 2 de grosor: la capa exterior siempre sobrevive
+ * porque da al aire.
+ * @returns nº de bloques eliminados.
+ */
+export function carveEnclosed(grid: VoxelGrid, size: Vec3) {
+  const [sx, sy, sz] = size
+  const solid = (x: number, y: number, z: number) => {
+    if (x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz) return false
+    return grid[y][z][x] !== null
+  }
+  const kill: Array<[number, number, number]> = []
+  for (let y = 0; y < sy; y++) {
+    for (let z = 0; z < sz; z++) {
+      for (let x = 0; x < sx; x++) {
+        if (!grid[y][z][x]) continue
+        if (
+          solid(x + 1, y, z) && solid(x - 1, y, z) &&
+          solid(x, y + 1, z) && solid(x, y - 1, z) &&
+          solid(x, y, z + 1) && solid(x, y, z - 1)
+        ) {
+          kill.push([x, y, z])
+        }
+      }
+    }
+  }
+  for (const [x, y, z] of kill) grid[y][z][x] = null
+  return kill.length
 }

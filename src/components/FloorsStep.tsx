@@ -22,10 +22,16 @@ export function FloorsStep({ building, update }: Props) {
       </label>
       <label className="toggle">
         <input type="checkbox" checked={f.slab} onChange={() => update({ floors: { ...f, slab: !f.slab } })} />
-        Losa entre pisos
+        Piso entre plantas
       </label>
       {f.slab && (
-        <BlockField label="Material de losa" value={f.slabBlock} onChange={(slabBlock) => update({ floors: { ...f, slabBlock } })} />
+        <>
+          <BlockField label="Material de piso (losa o bloque)" value={f.slabBlock} onChange={(slabBlock) => update({ floors: { ...f, slabBlock } })} />
+          <label className="toggle">
+            <input type="checkbox" checked={f.inset} onChange={() => update({ floors: { ...f, inset: !f.inset } })} />
+            Solo por dentro (no en el contorno)
+          </label>
+        </>
       )}
       <small className="ai-hint">
         Si los pisos pedidos no caben en un volumen, se construyen los que quepan y se avisa cuántos faltan.

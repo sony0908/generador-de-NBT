@@ -82,6 +82,14 @@ export function FacadeStep({ building, update }: Props) {
         )}
       </div>
 
+      {current.pattern === 'punched_grid' && (
+        <WindowPixelEditor
+          face={current}
+          floorH={building.floors.floorHeight}
+          onChange={(custom) => setFacePatch({ custom })}
+        />
+      )}
+
       <h4 className="subhead">Plantillas listas</h4>
       <div className="tpl-grid">
         {BUILTIN_FACADE_TEMPLATES.map((t) => (
@@ -118,6 +126,7 @@ export function FacadeStep({ building, update }: Props) {
           {userTpls.map((t) => (
             <div key={t.name} className="tpl-card">
               <strong>{t.name}</strong>
+              {t.face.custom?.length ? <small>Diseño de ventana personalizado</small> : null}
               <div className="plan-buttons">
                 <button type="button" className="ghost" onClick={() => applyTemplate(t.face, false)}>A esta cara</button>
                 <button type="button" className="ghost" onClick={() => applyTemplate(t.face, true)}>A todas</button>
@@ -136,6 +145,107 @@ export function FacadeStep({ building, update }: Props) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+type PxCell = 'G' | 'W' | '.'
+
+function WindowPixelEditor({
+  face,
+  floorH,
+  onChange,
+}: {
+  face: FacadeFace
+  floorH: number
+  onChange: (custom: string[][] | null) => void
+}) {
+  const [brush, setBrush] = useState<PxCell>('G')
+  const [painting, setPainting] = useState(false)
+  const rows = Math.max(1, Math.min(5, floorH - face.sill))
+  const cols = Math.max(1, Math.min(8, face.windowW))
+
+  const grid: string[][] = []
+  for (let y = 0; y < rows; y++) {
+    const row: string[] = []
+    for (let x = 0; x < cols; x++) {
+      row.push(face.custom?.[y]?.[x] ?? 'G')
+    }
+    grid.push(row)
+  }
+
+  const paint = (x: number, y: number) => {
+    const next = grid.map((r) => [...r])
+    next[y][x] = brush
+    onChange(next)
+  }
+
+  if (!face.custom) {
+    return (
+      <div className="px-wrap">
+        <small className="ai-hint">
+          Ventana maciza de vidrio ({cols}×{rows}). Personalízala celda por celda:
+        </small>
+        <div className="plan-buttons">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => onChange(grid)}
+          >
+            Personalizar ventana
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-wrap">
+      <small className="ai-hint">
+        Diseña la ventana ({cols}×{rows}): se repite en cada hueco de esta cara.
+      </small>
+      <div className="brush-row">
+        {(['G', 'W', '.'] as const).map((b) => (
+          <button
+            key={b}
+            type="button"
+              className={'brush ' + (b === '.' ? 'px-brush-dot' : 'px-brush-' + b) + (brush === b ? ' on' : '')}
+            onClick={() => setBrush(b)}
+          >
+            {b === 'G' ? 'Vidrio' : b === 'W' ? 'Muro' : 'No tocar'}
+          </button>
+        ))}
+      </div>
+      <div
+        className="px-grid"
+        style={{ gridTemplateColumns: `repeat(${cols}, 30px)` }}
+        onMouseLeave={() => setPainting(false)}
+        onMouseUp={() => setPainting(false)}
+      >
+        {grid.map((row, y) =>
+          row.map((cell, x) => (
+            <button
+              key={x + '-' + y}
+              type="button"
+              className={'px-cell px-' + (cell === 'G' || cell === 'W' ? cell : 'dot')}
+              onMouseDown={(e) => {
+                e.preventDefault()
+                setPainting(true)
+                paint(x, y)
+              }}
+              onMouseEnter={() => {
+                if (painting) paint(x, y)
+              }}
+              title={`Fila ${y + 1}, col ${x + 1}`}
+            />
+          )),
+        )}
+      </div>
+      <div className="plan-buttons">
+        <button type="button" className="ghost" onClick={() => onChange(null)}>
+          Volver a vidrio macizo
+        </button>
+      </div>
     </div>
   )
 }

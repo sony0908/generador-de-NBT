@@ -35,7 +35,7 @@ type StructureViewerProps = {
   assetFile: File | null
 }
 
-type ViewPreset = 'isometric' | 'top' | 'front' | 'right'
+type ViewPreset = 'isometric' | 'top' | 'front' | 'back' | 'right' | 'left'
 
 type ViewerController = {
   reset: () => void
@@ -76,7 +76,9 @@ function modelBounds(model: ViewerModel) {
 function viewDirection(view: ViewPreset) {
   if (view === 'top') return new Vector3(0, 1, 0.001)
   if (view === 'front') return new Vector3(0, 0.28, 1)
+  if (view === 'back') return new Vector3(0, 0.28, -1)
   if (view === 'right') return new Vector3(1, 0.28, 0)
+  if (view === 'left') return new Vector3(-1, 0.28, 0)
   return new Vector3(1, 0.78, 1)
 }
 
@@ -463,8 +465,14 @@ export function MinecraftStructureViewer({
           <button type="button" onClick={() => controllerRef.current?.setView('front')}>
             Frontal
           </button>
+          <button type="button" onClick={() => controllerRef.current?.setView('back')}>
+            Trasera
+          </button>
           <button type="button" onClick={() => controllerRef.current?.setView('right')}>
-            Lateral
+            Lateral der.
+          </button>
+          <button type="button" onClick={() => controllerRef.current?.setView('left')}>
+            Lateral izq.
           </button>
         </div>
         <div className="minecraft-viewer-toolbar-group minecraft-viewer-toolbar-actions">

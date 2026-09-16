@@ -150,8 +150,7 @@ export function MassingStep({ building, update }: Props) {
           <button type="button" className="ghost" onClick={addVolume}>
             <Plus size={14} /> Cubo
           </button>
-        </div>
-        {building.volumes.map((v) => (
+        </div>        {building.volumes.map((v) => (
           <button
             key={v.id}
             type="button"
@@ -164,6 +163,14 @@ export function MassingStep({ building, update }: Props) {
             </small>
           </button>
         ))}
+        <label className="toggle union-toggle">
+          <input
+            type="checkbox"
+            checked={building.hollowUnion}
+            onChange={() => update({ hollowUnion: !building.hollowUnion })}
+          />
+          Quitar paredes internas donde se pegan
+        </label>
       </div>
 
       <div className="massing-canvas-wrap">

@@ -38,21 +38,35 @@ function resolveBlock(raw: string, palette: Record<string, string>, errors: stri
   return norm
 }
 
-function windowCols(len: number, w: number, gap: number, off = 0) {
-  const cols = new Set<number>()
+function windowStarts(len: number, w: number, gap: number, off = 0) {
+  const starts: number[] = []
   const period = w + gap
   const usable = len - 2
-  if (usable <= 0 || period <= 0) return cols
+  if (usable <= 0 || period <= 0) return starts
   const fullWindows = Math.max(1, Math.floor((usable + gap) / period))
   const totalWin = fullWindows * w + (fullWindows - 1) * gap
   const start = 1 + Math.max(0, Math.floor((usable - totalWin) / 2))
   for (let k = 0; k < fullWindows; k++) {
-    for (let i = 0; i < w; i++) {
-      const c = start + k * period + i
-      if (c >= 1 && c < len - 1) cols.add(off + c)
-    }
+    const c = start + k * period
+    if (c >= 1 && c + w - 1 < len - 1) starts.push(off + c)
+  }
+  // Respaldo: si ni una ventana completa cabe (ej. tira ribbon w=99),
+  // se pinta igual y el llamador recorta por rango (banda completa).
+  if (!starts.length && usable > 0) starts.push(off + 1)
+  return starts
+}
+
+function windowCols(len: number, w: number, gap: number, off = 0) {
+  const cols = new Set<number>()
+  for (const s of windowStarts(len, w, gap, 0)) {
+    for (let i = 0; i < w; i++) cols.add(off + s + i)
   }
   return cols
+}
+
+/** Inicios de ventana (para el compilador paramétrico). Exportado para testear. */
+export function getWindowStarts(len: number, w: number, gap: number) {
+  return windowStarts(len, w, gap, 0)
 }
 
 function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, string>, op: ShellOp, index: number, errors: string[]) {
@@ -127,6 +141,53 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
             if (x < rx0 || x > rx1) continue
             for (let z = Math.max(1, rz0); z <= Math.min(sz - 2, rz1); z++) {
               if (wz.has(z)) set(x, y, z, block)
+            }
+          }
+        }
+      }
+      return
+    }
+    case 'custom_windows': {
+      const wall = resolveBlock(op.wall, palette, errors, index)
+      const glass = resolveBlock(op.glass, palette, errors, index)
+      if (!wall || !glass) return
+      const faces = (Array.isArray(op.face) ? op.face : [op.face]) as Array<'front' | 'back' | 'left' | 'right'>
+      const rx0 = op.x0 ?? 0
+      const rx1 = op.x1 ?? sx - 1
+      const rz0 = op.z0 ?? 0
+      const rz1 = op.z1 ?? sz - 1
+      const patH = op.pattern.length
+      const patW = Math.max(0, ...op.pattern.map((r) => r.length))
+      if (!patH || !patW) return
+      const paint = (x: number, y: number, z: number, cell: string) => {
+        if (y < 0 || y >= sy) return
+        if (cell === 'G') set(x, y, z, glass)
+        else if (cell === 'W') set(x, y, z, wall)
+      }
+      for (let f = 0; f < op.floors; f++) {
+        const bandY = op.shaftY0 + f * op.floorH + op.sill
+        for (const face of faces) {
+          if (face !== 'front' && face !== 'back' && face !== 'left' && face !== 'right') continue
+          const horizontal = face === 'front' || face === 'back'
+          const len = horizontal ? rx1 - rx0 + 1 : rz1 - rz0 + 1
+          const off = horizontal ? rx0 : rz0
+          for (const s of windowStarts(len, patW, op.gap, off)) {
+            for (let dy = 0; dy < patH; dy++) {
+              const row = op.pattern[dy]
+              if (!row) continue
+              for (let dx = 0; dx < row.length; dx++) {
+                const cell = row[dx]
+                if (cell !== 'G' && cell !== 'W') continue
+                if (horizontal) {
+                  const x = s + dx
+                  if (x < Math.max(1, rx0) || x > Math.min(sx - 2, rx1)) continue
+                  paint(x, bandY + dy, face === 'front' ? sz - 1 : 0, cell)
+                } else {
+                  const z = s + dx
+                  if (z < Math.max(1, rz0) || z > Math.min(sz - 2, rz1)) continue
+                  paint(face === 'right' ? sx - 1 : 0, bandY + dy, z, cell)
+                }
+              }
             }
           }
         }

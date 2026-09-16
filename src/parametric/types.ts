@@ -18,6 +18,8 @@ export type FloorSpec = {
   floorHeight: 2 | 3 | 4 | 5
   slab: boolean
   slabBlock: string
+  /** true = piso solo interior (no toca el contorno del edificio). */
+  inset: boolean
 }
 
 export type FacadePattern = 'punched_grid' | 'ribbon' | 'solid'
@@ -43,6 +45,12 @@ export type FacadeFace = {
   sill: number
   wall: string
   glass: string
+  /**
+   * Diseño pixel-art por ventana (filas de arriba hacia abajo, una por cada
+   * fila de la ventana). Celdas: 'G' vidrio, 'W' muro, '.' no tocar.
+   * null = ventana maciza de vidrio. Solo vale con pattern 'punched_grid'.
+   */
+  custom?: string[][] | null
 }
 
 export type FacadeSpec = Record<FacadeFaceName, FacadeFace>
@@ -86,6 +94,8 @@ export type Building = {
   facade: FacadeSpec
   base: BaseSpec
   roof: RoofSpec
+  /** Quita paredes internas donde los cubos se pegan (recomendado). */
+  hollowUnion: boolean
 }
 
 let volumeSeq = 2
@@ -96,7 +106,7 @@ export function newVolumeId() {
 }
 
 export function defaultFacadeFace(wall: string, glass: string): FacadeFace {
-  return { pattern: 'punched_grid', windowW: 2, gapX: 2, sill: 1, wall, glass }
+  return { pattern: 'punched_grid', windowW: 2, gapX: 2, sill: 1, wall, glass, custom: null }
 }
 
 export function defaultBuilding(): Building {
@@ -104,7 +114,7 @@ export function defaultBuilding(): Building {
   const glass = 'minecraft:light_blue_stained_glass'
   return {
     volumes: [{ id: 'vol-1', name: 'Torre', from: [0, 0, 0], to: [10, 29, 10] }],
-    floors: { count: 8, floorHeight: 3, slab: true, slabBlock: 'minecraft:stone_slab' },
+    floors: { count: 8, floorHeight: 3, slab: true, slabBlock: 'minecraft:stone_slab', inset: true },
     facade: {
       front: defaultFacadeFace(wall, glass),
       back: defaultFacadeFace(wall, glass),
@@ -113,6 +123,7 @@ export function defaultBuilding(): Building {
     },
     base: { height: 3, style: 'retail_glass', wall, glass, entranceFace: 'front', entranceW: 3 },
     roof: { style: 'open_frame', height: 2, trim: wall, slab: 'minecraft:stone_slab' },
+    hollowUnion: true,
   }
 }
 

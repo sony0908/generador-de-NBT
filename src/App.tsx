@@ -5,7 +5,7 @@ import { interpretRecipe, countBlocks } from './voxel/interpreter'
 import { gridToNbt, placementGuide, type NbtPart } from './voxel/nbt'
 import { gridToViewer } from './voxel/viewer'
 import type { ViewerModel } from './generator/viewerTypes'
-import { compileBuilding } from './parametric/compiler'
+import { compileBuilding, carveEnclosed } from './parametric/compiler'
 import { defaultBuilding, type Building } from './parametric/types'
 import { MassingStep } from './components/MassingStep'
 import { FloorsStep } from './components/FloorsStep'
@@ -45,7 +45,12 @@ export default function App() {
       const validation = validateRecipe(recipe)
       if (!validation.ok) return { ok: false as const, errors: validation.errors, warnings }
       const { grid, size, errors } = interpretRecipe(recipe)
-      return { ok: true as const, grid, size, warnings: [...warnings, ...validation.warnings, ...errors] }
+      const allWarnings = [...warnings, ...validation.warnings, ...errors]
+      if (building.hollowUnion) {
+        const carved = carveEnclosed(grid, size)
+        if (carved > 0) allWarnings.push(`Paredes internas eliminadas: ${carved} bloques.`)
+      }
+      return { ok: true as const, grid, size, warnings: allWarnings }
     } catch (e) {
       return { ok: false as const, errors: [e instanceof Error ? e.message : 'Diseño inválido.'], warnings: [] as string[] }
     }
@@ -112,17 +117,18 @@ export default function App() {
             <small>Volumetría → pisos → fachada → base → NBT escalable</small>
           </div>
         </div>
-        <div className="wizard-steps">
-          {STEPS.map((s, i) => (
-            <button key={s} type="button" className={step === i ? 'on' : ''} onClick={() => setStep(i)}>
-              {i + 1} · {s}
-            </button>
-          ))}
-        </div>
+        <div className="live-badge">{summary || 'Diseño inválido'}</div>
       </header>
 
-      <main className="layout">
-        <section className="card span">
+      <main className="layout-editor">
+        <section className="card sidebar">
+          <div className="wizard-steps">
+            {STEPS.map((s, i) => (
+              <button key={s} type="button" className={step === i ? 'on' : ''} onClick={() => setStep(i)}>
+                {i + 1} · {s}
+              </button>
+            ))}
+          </div>
           <div className="card-head">
             <div>
               <span className="eyebrow">Paso {step + 1} de {STEPS.length}</span>
@@ -147,7 +153,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="card span">
+        <section className="card viewer-sticky">
           <div className="card-head">
             <span className="icon"><Boxes size={20} /></span>
             <div>

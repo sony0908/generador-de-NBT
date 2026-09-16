@@ -14,9 +14,37 @@
 }
 .tabs button.active { background: #0e5a8a; border-color: #0e5a8a; color: #fff; }
 
-.layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-.span { grid-column: 1 / -1; }
+.live-badge {
+  font-size: 13px;
+  color: #7ee2a8;
+  background: rgba(40, 180, 120, 0.1);
+  border: 1px solid rgba(40, 180, 120, 0.35);
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+
+/* Editor: opciones al lateral, visor siempre visible. */
+.layout-editor {
+  display: grid;
+  grid-template-columns: 430px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .layout-editor { grid-template-columns: 1fr; }
+  .viewer-sticky { position: static; }
+}
+
+.sidebar {
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+}
+
+.viewer-sticky {
+  position: sticky;
+  top: 12px;
+}
 
 .card {
   background: #161c24; border: 1px solid #26303d;
@@ -186,3 +214,37 @@
   font-size: 0.75rem;
   color: #7d8ea1;
 }
+
+.px-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  background: #0f141b;
+  border: 1px solid #2b3644;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.px-grid {
+  display: grid;
+  gap: 3px;
+  justify-content: start;
+}
+
+.px-cell {
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  cursor: crosshair;
+  padding: 0;
+}
+
+.px-G { background: #79b7c9; }
+.px-W { background: #9aa1ad; }
+.px-dot { background: #0b0f14; border-style: dashed; }
+
+.px-brush-G.on { border-color: #79b7c9; }
+.px-brush-W.on { border-color: #9aa1ad; }
+.px-brush-dot.on { border-color: #58a6ff; }
