@@ -1,15 +1,26 @@
 import { lazy, Suspense, useMemo, useRef, useState } from 'react'
-import { Boxes, Download, ImagePlus, ScanEye, Sparkles } from 'lucide-react'
-import { GEMINI_MODELS, imageToRecipe, localPromptToRecipe } from './ai/gemini'
-import { validateRecipe, type Recipe } from './ai/schema'
-import { countBlocks, interpretRecipe, type VoxelGrid } from './voxel/interpreter'
-import { applyInteriorOps, buildInteriorOps, type InteriorOptions } from './voxel/interior'
+import { Boxes, Download, DraftingCompass, ImagePlus, ScanEye, Sparkles } from 'lucide-react'
+import {
+  GEMINI_MODELS,
+  PLAN_LABELS,
+  PLAN_NAMES,
+  diffGrids,
+  imageToPlans,
+  localPromptToPlans,
+  regeneratePlan,
+  validatePlanSet,
+  type PlanName,
+  type PlanSet,
+} from './ai/plans'
+import { fusePlanSet, scalePlanSet, SCALE_OPTIONS } from './voxel/fuse'
+import type { VoxelGrid } from './voxel/interpreter'
 import { gridToNbt, placementGuide, type NbtPart } from './voxel/nbt'
 import { gridToViewer } from './voxel/viewer'
 import type { ViewerModel } from './generator/viewerTypes'
-import { RecipePanel } from './components/RecipePanel'
-import { InteriorPanel } from './components/InteriorPanel'
+import { PlanCard } from './components/PlanCard'
 import './App.css'
+
+const SHOW_INTERIOR = false // Fase 2 (pisos/escaleras/luz/muebles) pospuesta por decisión del usuario.
 
 const MinecraftStructureViewer = lazy(async () => {
   const module = await import('./components/MinecraftStructureViewer')
@@ -27,46 +38,42 @@ export default function App() {
   const [viewerAssetFile, setViewerAssetFile] = useState<File | null>(null)
   const viewerAssetInputRef = useRef<HTMLInputElement>(null)
 
-  const [recipeText, setRecipeText] = useState('')
+  // Planos arquitectónicos (escala 1, tal como los dibujó la IA)
+  const [basePlans, setBasePlans] = useState<PlanSet | null>(null)
+  const [status, setStatus] = useState<Record<PlanName, boolean>>({ front: false, side: false, top: false })
+  const [attempts, setAttempts] = useState<Record<PlanName, number>>({ front: 1, side: 1, top: 1 })
+  const [scaleFactor, setScaleFactor] = useState<number>(1)
+
   const [grid, setGrid] = useState<VoxelGrid | null>(null)
   const [size, setSize] = useState<[number, number, number] | null>(null)
+  const [fuseInfo, setFuseInfo] = useState('')
   const [parts, setParts] = useState<NbtPart[]>([])
   const [palette, setPalette] = useState<string[]>([])
   const [removed, setRemoved] = useState<{ name: string; count: number }[]>([])
 
-  const [floorYsText, setFloorYsText] = useState('3, 6, 9, 12')
-  const [interior, setInterior] = useState<InteriorOptions>({ floors: true, stairs: true, lighting: true, furnish: false, floorYs: [] })
   const [loading, setLoading] = useState(false)
+  const [regenBusy, setRegenBusy] = useState<PlanName | null>(null)
   const [building, setBuilding] = useState(false)
-  const [applying, setApplying] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const validation = useMemo(() => {
-    if (!recipeText.trim()) return { ok: false as const, errors: [] as string[], warnings: [] as string[] }
-    try {
-      return validateRecipe(JSON.parse(recipeText))
-    } catch {
-      return { ok: false as const, errors: ['El JSON tiene errores de sintaxis.'], warnings: [] as string[] }
-    }
-  }, [recipeText])
+  // Planos efectivos = base × escala determinista (la IA nunca escala).
+  const effective = useMemo(
+    () => (basePlans ? scalePlanSet(basePlans, scaleFactor) : null),
+    [basePlans, scaleFactor],
+  )
+  const effectiveValidation = useMemo(
+    () => (effective ? validatePlanSet(effective) : null),
+    [effective],
+  )
+  const allAccepted = PLAN_NAMES.every((p) => status[p])
+  const needsScale = !!basePlans && (basePlans.size[0] > 48 || basePlans.size[1] > 48 || basePlans.size[2] > 48)
 
   const viewer: ViewerModel | null = useMemo(
     () => (grid && size ? gridToViewer(grid, size) : null),
     [grid, size],
   )
-
-  const summary = useMemo(() => {
-    if (!recipeText.trim()) return ''
-    try {
-      const r = JSON.parse(recipeText) as Recipe
-      const n = grid ? countBlocks(grid) : 0
-      return `${r.size?.join('×')} · ${r.shell_ops?.length ?? 0} ops cáscara · ${r.interior_ops?.length ?? 0} ops interior · ${n} bloques en visor`
-    } catch {
-      return ''
-    }
-  }, [recipeText, grid])
 
   const pickImage = (f: File | undefined) => {
     if (!f) return
@@ -76,7 +83,18 @@ export default function App() {
     reader.readAsDataURL(f)
   }
 
-  const generateRecipe = async () => {
+  const resetPlans = (ps: PlanSet) => {
+    setBasePlans(ps)
+    setStatus({ front: false, side: false, top: false })
+    setAttempts({ front: 1, side: 1, top: 1 })
+    setScaleFactor(1)
+    setGrid(null)
+    setSize(null)
+    setParts([])
+    setFuseInfo('')
+  }
+
+  const generatePlans = async () => {
     setLoading(true)
     setError('')
     setNotice('')
@@ -87,15 +105,16 @@ export default function App() {
         if (!geminiKey) throw new Error('Ingresa tu API Key de Gemini.')
         localStorage.setItem('gennbt-gemini-key', geminiKey)
         localStorage.setItem('gennbt-gemini-model', geminiModel)
-        const { recipe, warnings } = await imageToRecipe({ apiKey: geminiKey, model: geminiModel, image })
-        setRecipeText(JSON.stringify(recipe, null, 2))
-        if (warnings.length) setNotice(warnings.join(' | '))
-        buildBase(recipe)
+        const { planSet, warnings } = await imageToPlans({ apiKey: geminiKey, model: geminiModel, image })
+        resetPlans(planSet)
+        setNotice(
+          `Despiece listo: ${planSet.size.join('×')}. Revisa los 3 planos y acéptalos.` +
+            (warnings.length ? ' ' + warnings.join(' | ') : ''),
+        )
       } else {
-        const { recipe, warnings } = await localPromptToRecipe({ endpoint, description: localDesc })
-        setRecipeText(JSON.stringify(recipe, null, 2))
+        const { planSet, warnings } = await localPromptToPlans({ endpoint, description: localDesc })
+        resetPlans(planSet)
         if (warnings.length) setNotice(warnings.join(' | '))
-        buildBase(recipe)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falló la generación.')
@@ -104,55 +123,74 @@ export default function App() {
     }
   }
 
-  const buildBase = (recipe?: Recipe) => {
-    setBuilding(true)
+  const handleRegenerate = async (plan: PlanName, note: string) => {
+    if (!basePlans) return
+    setRegenBusy(plan)
     setError('')
     try {
-      const parsed = recipe ?? (JSON.parse(recipeText) as Recipe)
-      const v = validateRecipe(parsed)
-      if (!v.ok) throw new Error(v.errors.join(' | '))
-      const { grid: g, size: s, errors } = interpretRecipe(parsed)
-      if (errors.length) setNotice(errors.join(' | '))
-      setGrid(g)
-      setSize(s)
+      const { planSet } = await regeneratePlan({
+        apiKey: geminiKey,
+        model: geminiModel,
+        image: tab === 'image' ? image : null,
+        current: basePlans,
+        plan,
+        userNote: note,
+      })
+      const changed = diffGrids(basePlans.plans[plan], planSet.plans[plan])
+      setBasePlans(planSet)
+      setStatus((s) => ({ ...s, [plan]: false }))
+      setAttempts((a) => ({ ...a, [plan]: a[plan] + 1 }))
+      setGrid(null)
       setParts([])
-      // Sugerir niveles de piso desde facade.floors si existen
-      if (parsed.facade?.floors && parsed.facade.floors > 1 && s[1] > 6) {
-        const step = Math.max(3, Math.floor((s[1] - 4) / parsed.facade.floors))
-        const ys: number[] = []
-        for (let y = 3; y < s[1] - 1; y += step) ys.push(y)
-        setFloorYsText(ys.join(', '))
-      }
+      setNotice(
+        changed >= 0
+          ? `Plano ${PLAN_LABELS[plan]} regenerado: ${changed} celdas distintas. Revísalo y acéptalo.`
+          : `Plano ${PLAN_LABELS[plan]} regenerado con otras dimensiones. Revísalo y acéptalo.`,
+      )
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Receta inválida.')
+      setError(e instanceof Error ? e.message : 'No se pudo regenerar.')
     } finally {
-      setBuilding(false)
+      setRegenBusy(null)
     }
   }
 
-  const parseFloorYs = (maxY: number) => {
-    const ys = floorYsText.split(',').map((t) => Number(t.trim())).filter((n) => Number.isInteger(n) && n > 0 && n < maxY)
-    return [...new Set(ys)].sort((a, b) => a - b)
+  const handleSaveEdit = (plan: PlanName, gridCells: string[][]) => {
+    if (!basePlans) return
+    const next: PlanSet = {
+      ...basePlans,
+      plans: { ...basePlans.plans, [plan]: { ...basePlans.plans[plan], grid: gridCells } },
+    }
+    const v = validatePlanSet(next)
+    if (!v.ok) {
+      setError('Edición inválida: ' + v.errors.slice(0, 3).join(' | '))
+      return
+    }
+    setBasePlans(next)
+    setStatus((s) => ({ ...s, [plan]: false }))
+    setGrid(null)
+    setParts([])
+    setNotice(`Plano ${PLAN_LABELS[plan]} editado a mano. Revísalo y acéptalo.`)
   }
 
-  const applyInterior = () => {
-    if (!recipeText.trim() || !size) return
-    setApplying(true)
+  const build3D = () => {
+    if (!effective || !effectiveValidation?.ok) return
+    setBuilding(true)
     setError('')
     try {
-      const parsed = JSON.parse(recipeText) as Recipe
-      const base = interpretRecipe(parsed)
-      const ys = parseFloorYs(size[1])
-      const ops = buildInteriorOps(size, { ...interior, floorYs: ys })
-      const errs = applyInteriorOps(base.grid, size, [...parsed.interior_ops, ...ops])
-      if (errs.length) setNotice(errs.join(' | '))
-      setGrid(base.grid)
+      const { grid: g, size: s, kept, carved, conflicts } = fusePlanSet(effective)
+      if (!kept) throw new Error('La fusión no produjo bloques (¿planos llenos de air?).')
+      setGrid(g)
+      setSize(s)
       setParts([])
-      setNotice(`Interior aplicado (${ops.length} ops) sobre la base. La fachada no cambió.`)
+      setFuseInfo(
+        `${kept} bloques conservados · ${carved} tallados · trasera espejada del frontal` +
+          (conflicts.length ? ` · ${conflicts.length} conflictos resueltos` : ''),
+      )
+      if (conflicts.length) setNotice(conflicts.slice(0, 5).join(' | '))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo aplicar el interior.')
+      setError(e instanceof Error ? e.message : 'No se pudo fusionar.')
     } finally {
-      setApplying(false)
+      setBuilding(false)
     }
   }
 
@@ -202,7 +240,7 @@ export default function App() {
           <Boxes size={26} />
           <div>
             <strong>Generador de NBT</strong>
-            <small>Imagen o prompt → receta visible → NBT · repo de pruebas</small>
+            <small>Foto → 3 planos → fusión 3D → NBT</small>
           </div>
         </div>
         <div className="tabs">
@@ -222,7 +260,7 @@ export default function App() {
             <div>
               <span className="eyebrow">Paso 1 — Entrada</span>
               <h2>{tab === 'image' ? 'Foto de referencia' : 'Descripción local'}</h2>
-              <p>{tab === 'image' ? 'La IA estima receta compacta; la geometría la construye el código.' : 'Qwen local genera la receta desde texto.'}</p>
+              <p>La IA dibuja 3 planos ortográficos; la geometría 3D la construye el código.</p>
             </div>
           </div>
           {tab === 'image' ? (
@@ -265,25 +303,77 @@ export default function App() {
               </label>
             </>
           )}
-          <button className="primary" type="button" disabled={loading} onClick={generateRecipe}>
-            {loading ? 'Generando receta…' : '1 · Generar receta y construir base'}
+          <button className="primary" type="button" disabled={loading} onClick={generatePlans}>
+            {loading ? 'Dibujando planos…' : '1 · Generar los 3 planos'}
           </button>
           {error && <div className="alert err">{error}</div>}
           {notice && <div className="alert ok">{notice}</div>}
         </section>
 
-        <RecipePanel
-          recipeText={recipeText}
-          setRecipeText={setRecipeText}
-          errors={validation.errors}
-          warnings={validation.warnings}
-          summary={summary}
-          building={building}
-          canBuild={!!recipeText.trim() && validation.ok}
-          onBuild={() => buildBase()}
-        />
+        <section className="card span">
+          <div className="card-head">
+            <span className="icon"><DraftingCompass size={20} /></span>
+            <div>
+              <span className="eyebrow">Paso 2 — Planos (1 celda = 1 bloque)</span>
+              <h2>Revisa, regenera o edita · acepta los 3 para construir</h2>
+              <p>Trasera = espejo del frontal. La IA nunca escala: si hace falta, el escalado lo aplicas tú aquí.</p>
+            </div>
+          </div>
+          {!effective ? (
+            <div className="empty">Genera los planos para verlos aquí.</div>
+          ) : (
+            <>
+              <div className="scale-row">
+                <span>
+                  Tamaño {effective.size.join('×')}
+                  {needsScale && scaleFactor === 1 ? ' · supera 48: elige escala o exporta multi-NBT' : ''}
+                  {scaleFactor < 1 ? ` · escalado desde ${basePlans!.size.join('×')}` : ''}
+                </span>
+                <div className="seg">
+                  {SCALE_OPTIONS.map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      className={scaleFactor === f ? 'on' : ''}
+                      onClick={() => { setScaleFactor(f); setGrid(null); setParts([]) }}
+                    >
+                      {f === 1 ? '1:1' : `${Math.round(f * 100)}%`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {effectiveValidation && !effectiveValidation.ok && (
+                <div className="alert err">{effectiveValidation.errors.slice(0, 3).join(' | ')}</div>
+              )}
+              <div className="plans-grid">
+                {PLAN_NAMES.map((p) => (
+                  <PlanCard
+                    key={p + scaleFactor}
+                    name={p}
+                    planSet={effective}
+                    accepted={status[p]}
+                    attempts={attempts[p]}
+                    busy={regenBusy === p}
+                    onAccept={() => setStatus((s) => ({ ...s, [p]: !s[p] }))}
+                    onRegenerate={(note) => handleRegenerate(p, note)}
+                    onSaveEdit={(g) => handleSaveEdit(p, g)}
+                  />
+                ))}
+              </div>
+              <button
+                className="primary"
+                type="button"
+                disabled={!allAccepted || !effectiveValidation?.ok || building}
+                onClick={build3D}
+              >
+                {building ? 'Fusionando…' : allAccepted ? '2 · Construir 3D desde los planos' : `Acepta los 3 planos (${PLAN_NAMES.filter((p) => status[p]).length}/3)`}
+              </button>
+              {fuseInfo && <div className="alert ok">{fuseInfo}</div>}
+            </>
+          )}
+        </section>
 
-        <section className="card">
+        <section className="card span">
           <div className="card-head">
             <span className="icon"><Boxes size={20} /></span>
             <div>
@@ -297,7 +387,7 @@ export default function App() {
               <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
             </Suspense>
           ) : (
-            <div className="empty">Genera la receta para ver la base aquí.</div>
+            <div className="empty">Acepta los 3 planos y construye para ver el 3D aquí.</div>
           )}
           <div className="assets-row">
             <div className="assets-info">
@@ -343,17 +433,10 @@ export default function App() {
             <Download size={16} /> {exporting ? 'Exportando…' : '3 · Descargar .nbt'}
           </button>
         </section>
-
-        <InteriorPanel
-          opts={interior}
-          setOpts={setInterior}
-          floorYsText={floorYsText}
-          setFloorYsText={setFloorYsText}
-          disabled={!grid}
-          applying={applying}
-          onApply={applyInterior}
-        />
       </main>
     </div>
   )
 }
+
+// Referencia para no perder el módulo pospuesto (tree-shaking lo ignora con el flag).
+void SHOW_INTERIOR

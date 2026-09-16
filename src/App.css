@@ -16,6 +16,7 @@
 
 .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+.span { grid-column: 1 / -1; }
 
 .card {
   background: #161c24; border: 1px solid #26303d;
