@@ -7,7 +7,7 @@ export type Face = 'front' | 'back' | 'left' | 'right' | 'all'
 
 export type ShellOp =
   | { op: 'box'; from: Vec3; to: Vec3; block: string; hollow?: boolean }
-  | { op: 'floor_slab'; y: number; block: string; from?: [number, number]; to?: [number, number] }
+  | { op: 'floor_slab'; y: number; block: string; from?: [number, number]; to?: [number, number]; props?: Record<string, string> }
   | {
       op: 'grid_windows'
       face: Face | Face[]

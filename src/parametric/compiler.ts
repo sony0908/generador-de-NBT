@@ -216,6 +216,8 @@ export function compileBuilding(b: Building): CompileResult {
             block: use(b.floors.slabBlock),
             from: inset ? [v.x0 + 1, v.z0 + 1] : [v.x0, v.z0],
             to: inset ? [v.x1 - 1, v.z1 - 1] : [v.x1, v.z1],
+            // Losa ALTA: se puede pisar y poner bloques encima (piso funcional).
+            props: { type: 'top' },
           })
         }
       }
@@ -301,7 +303,7 @@ export function compileBuilding(b: Building): CompileResult {
     // Techo.
     const roofBase = v.y1 + 1
     if (b.roof.style === 'flat_slab') {
-      ops.push({ op: 'floor_slab', y: roofBase, block: use(b.roof.slab), from: [v.x0, v.z0], to: [v.x1, v.z1] })
+      ops.push({ op: 'floor_slab', y: roofBase, block: use(b.roof.slab), from: [v.x0, v.z0], to: [v.x1, v.z1], props: { type: 'top' } })
       for (const f of FACADE_FACES) {
         ops.push(faceBox(v, f, roofBase + 1, roofBase + 1, use(b.roof.trim)))
       }

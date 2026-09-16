@@ -1,7 +1,22 @@
 import type { Recipe, ShellOp, Vec3 } from '../ai/schema'
 import { normalizeBlockName } from './palette'
 
-export type VoxelGrid = (string | null)[][][] // [y][z][x]
+export type VoxelProps = Record<string, string>
+
+/** Celda: id de bloque o id + estados (ej. losa alta {type:'top'}). */
+export type Voxel = string | { name: string; props: VoxelProps }
+
+export type VoxelGrid = (Voxel | null)[][][] // [y][z][x]
+
+/** Nombre del bloque sin importar si lleva estados. */
+export function voxelName(v: Voxel): string {
+  return typeof v === 'string' ? v : v.name
+}
+
+/** Estados del bloque ({} si es id plano). */
+export function voxelProps(v: Voxel): VoxelProps {
+  return typeof v === 'string' ? {} : v.props
+}
 
 export type InterpretResult = {
   grid: VoxelGrid
@@ -71,7 +86,7 @@ export function getWindowStarts(len: number, w: number, gap: number) {
 
 function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, string>, op: ShellOp, index: number, errors: string[]) {
   const [sx, sy, sz] = size
-  const set = (x: number, y: number, z: number, b: string | null) => {
+  const set = (x: number, y: number, z: number, b: Voxel | null) => {
     if (inBounds(x, y, z, size)) grid[y][z][x] = b
   }
   switch (op.op) {
@@ -108,8 +123,9 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
       }
       const [fx0, fz0] = op.from ?? [0, 0]
       const [fx1, fz1] = op.to ?? [sx - 1, sz - 1]
+      const cell: Voxel = op.props && Object.keys(op.props).length ? { name: block, props: { ...op.props } } : block
       for (let z = Math.max(0, fz0); z <= Math.min(sz - 1, fz1); z++) {
-        for (let x = Math.max(0, fx0); x <= Math.min(sx - 1, fx1); x++) set(x, op.y, z, block)
+        for (let x = Math.max(0, fx0); x <= Math.min(sx - 1, fx1); x++) set(x, op.y, z, cell)
       }
       return
     }
@@ -279,7 +295,8 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
       for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
         for (let z = Math.min(z0, z1); z <= Math.max(z0, z1); z++) {
           for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
-            if (inBounds(x, y, z, size) && grid[y][z][x] === find) set(x, y, z, block)
+            const cur = inBounds(x, y, z, size) ? grid[y][z][x] : null
+            if (cur && voxelName(cur) === find) set(x, y, z, block)
           }
         }
       }

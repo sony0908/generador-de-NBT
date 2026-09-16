@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo, useRef, useState } from 'react'
-import { Boxes, Download } from 'lucide-react'
+import { Boxes, Cuboid, DoorOpen, Download, Layers, Paintbrush } from 'lucide-react'
 import { validateRecipe } from './ai/schema'
 import { interpretRecipe, countBlocks } from './voxel/interpreter'
 import { gridToNbt, placementGuide, type NbtPart } from './voxel/nbt'
@@ -18,7 +18,12 @@ const MinecraftStructureViewer = lazy(async () => {
   return { default: module.MinecraftStructureViewer }
 })
 
-const STEPS = ['Volumetría', 'Pisos', 'Fachada', 'Base y techo'] as const
+const STEPS = [
+  { label: 'Volumetría', icon: Cuboid },
+  { label: 'Pisos', icon: Layers },
+  { label: 'Fachada', icon: Paintbrush },
+  { label: 'Base y techo', icon: DoorOpen },
+] as const
 
 export default function App() {
   const [step, setStep] = useState(0)
@@ -108,32 +113,51 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
+    <div className="studio">
+      <header className="studio-top">
         <div className="brand">
-          <Boxes size={26} />
+          <Boxes size={22} />
           <div>
             <strong>Generador de edificios</strong>
-            <small>Volumetría → pisos → fachada → base → NBT escalable</small>
+            <small>{summary || 'Diseño inválido'}</small>
           </div>
         </div>
-        <div className="live-badge">{summary || 'Diseño inválido'}</div>
+        <div className="top-actions">
+          <button type="button" className="ghost" onClick={() => viewerAssetInputRef.current?.click()} title={viewerAssetFile ? viewerAssetFile.name : 'Ver texturas reales'}>
+            {viewerAssetFile ? 'Jar ✓' : 'client.jar'}
+          </button>
+          <input
+            ref={viewerAssetInputRef}
+            type="file"
+            accept=".jar,.zip"
+            className="visually-hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (f) setViewerAssetFile(f)
+            }}
+          />
+          <button className="primary" type="button" disabled={!compiled.ok || exporting} onClick={exportNbt}>
+            <Download size={15} /> {exporting ? 'Exportando…' : '.nbt'}
+          </button>
+        </div>
       </header>
 
-      <main className="layout-editor">
-        <section className="card sidebar">
-          <div className="wizard-steps">
-            {STEPS.map((s, i) => (
-              <button key={s} type="button" className={step === i ? 'on' : ''} onClick={() => setStep(i)}>
-                {i + 1} · {s}
-              </button>
-            ))}
-          </div>
-          <div className="card-head">
-            <div>
-              <span className="eyebrow">Paso {step + 1} de {STEPS.length}</span>
-              <h2>{STEPS[step]}</h2>
-            </div>
+      <div className="studio-body">
+        <nav className="rail" aria-label="Pasos">
+          {STEPS.map((s, i) => (
+            <button key={s.label} type="button" className={step === i ? 'on' : ''} onClick={() => setStep(i)}>
+              <s.icon size={18} />
+              <span className="n">{i + 1}</span>
+              {s.label}
+            </button>
+          ))}
+        </nav>
+
+        <aside className="inspector">
+          <div className="insp-head">
+            <span className="eyebrow">Paso {step + 1} de {STEPS.length}</span>
+            <h2>{STEPS[step].label}</h2>
           </div>
           {step === 0 && <MassingStep building={building} update={update} />}
           {step === 1 && <FloorsStep building={building} update={update} />}
@@ -151,80 +175,40 @@ export default function App() {
               </button>
             )}
           </div>
-        </section>
+          {!compiled.ok && <div className="alert err">{compiled.errors.slice(0, 3).join(' | ')}</div>}
+          {error && <div className="alert err">{error}</div>}
+          {notice && <div className="alert ok">{notice}</div>}
+        </aside>
 
-        <section className="card viewer-sticky">
-          <div className="card-head">
-            <span className="icon"><Boxes size={20} /></span>
-            <div>
-              <span className="eyebrow">Vista en vivo + exportar</span>
-              <h2>{summary || 'Diseño inválido'}</h2>
-              <p>Todo cambio recompila al instante. Si un eje supera 48 se exporta en partes.</p>
-            </div>
-          </div>
-          {!compiled.ok ? (
-            <div className="alert err">{compiled.errors.slice(0, 3).join(' | ')}</div>
+        <main className="viewport theme-dark">
+          {viewer && viewer.states.length ? (
+            <Suspense fallback={<div className="viewport-empty">Cargando visor 3D…</div>}>
+              <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
+            </Suspense>
           ) : (
-            <>
-              {compiled.warnings.length > 0 && (
-                <div className="alert warn">{compiled.warnings.slice(0, 4).join(' | ')}</div>
-              )}
-              {viewer && viewer.states.length ? (
-                <Suspense fallback={<div className="empty">Cargando visor 3D…</div>}>
-                  <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
-                </Suspense>
-              ) : (
-                <div className="empty">El diseño no produjo bloques visibles.</div>
-              )}
-            </>
+            <div className="viewport-empty">El diseño no produjo bloques visibles.</div>
           )}
-          <div className="assets-row">
-            <div className="assets-info">
-              <span>Texturas: {viewerAssetFile ? viewerAssetFile.name : 'vista simplificada'}</span>
-              <small>{viewerAssetFile ? 'Modelos y texturas reales del juego' : 'Sube tu client.jar para ver texturas reales'}</small>
-            </div>
-            <div className="assets-actions">
-              <button type="button" className="ghost" onClick={() => viewerAssetInputRef.current?.click()}>
-                {viewerAssetFile ? 'Cambiar client.jar' : 'Cargar client.jar'}
-              </button>
-              {viewerAssetFile && (
-                <button type="button" className="ghost" onClick={() => setViewerAssetFile(null)}>
-                  Quitar
-                </button>
-              )}
-              <input
-                ref={viewerAssetInputRef}
-                type="file"
-                accept=".jar,.zip"
-                className="visually-hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  e.target.value = ''
-                  if (f) setViewerAssetFile(f)
-                }}
-              />
-            </div>
-          </div>
-          {!!palette.length && (
-            <div className="palette">Paleta: {palette.join(', ')}</div>
-          )}
-          {!!removed.length && (
-            <div className="alert warn">Omitidos (no vanilla): {removed.map((r) => `${r.name}×${r.count}`).join(', ')}</div>
+          {compiled.ok && compiled.warnings.length > 0 && (
+            <div className="toast warn">{compiled.warnings.slice(0, 2).join(' | ')}</div>
           )}
           {!!parts.length && (
-            <div className="alert ok">
+            <div className="toast ok">
               {parts.map((p) => (
-                <div key={p.index}>parte_{p.index}.nbt → offset [{p.offset.join(', ')}] · {p.size.join('×')} · {p.blocks} bloques</div>
+                <div key={p.index}>parte_{p.index}.nbt → offset [{p.offset.join(', ')}] · {p.size.join('×')}</div>
               ))}
             </div>
           )}
-          {error && <div className="alert err">{error}</div>}
-          {notice && <div className="alert ok">{notice}</div>}
-          <button className="primary" type="button" disabled={!compiled.ok || exporting} onClick={exportNbt}>
-            <Download size={16} /> {exporting ? 'Exportando…' : 'Descargar .nbt'}
-          </button>
-        </section>
-      </main>
+        </main>
+      </div>
+
+      <footer className="statusbar">
+        <span>{summary || '—'}</span>
+        {!!palette.length && <span>Paleta: {palette.join(', ')}</span>}
+        {!!removed.length && <span className="warn">Omitidos: {removed.map((r) => `${r.name}×${r.count}`).join(', ')}</span>}
+        {viewerAssetFile
+          ? <span className="ok">Texturas: {viewerAssetFile.name}</span>
+          : <span>Vista simplificada (sube client.jar para texturas)</span>}
+      </footer>
     </div>
   )
 }

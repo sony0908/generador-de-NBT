@@ -1,7 +1,7 @@
 import { Int32, write } from 'nbtify'
 import { splitStructureRegions, type StructureSize } from '../generator/geometry'
 import { isVanillaBlock, normalizeBlockName } from './palette'
-import type { VoxelGrid } from './interpreter'
+import { voxelName, voxelProps, type VoxelGrid } from './interpreter'
 import type { Vec3 } from '../ai/schema'
 
 export type NbtPart = { index: number; offset: Vec3; size: Vec3; bytes: Uint8Array; blocks: number }
@@ -17,18 +17,19 @@ export type GridToNbtResult = {
 // Convierte el grid a uno o varios .nbt (split automático si un eje >48).
 export async function gridToNbt(grid: VoxelGrid, size: Vec3): Promise<GridToNbtResult> {
   const [sx, sy, sz] = size
-  const palette: string[] = []
+  const palette: { name: string; props: Record<string, string> }[] = []
   const paletteIndex = new Map<string, number>()
   const removed = new Map<string, number>()
   type Entry = { pos: Vec3; state: number }
   const entries: Entry[] = []
 
-  const getIndex = (name: string) => {
-    let idx = paletteIndex.get(name)
+  const getIndex = (name: string, props: Record<string, string>) => {
+    const key = name + '\u0000' + Object.entries(props).sort().map(([k, v]) => k + '=' + v).join(',')
+    let idx = paletteIndex.get(key)
     if (idx === undefined) {
       idx = palette.length
-      palette.push(name)
-      paletteIndex.set(name, idx)
+      palette.push({ name, props: { ...props } })
+      paletteIndex.set(key, idx)
     }
     return idx
   }
@@ -38,13 +39,13 @@ export async function gridToNbt(grid: VoxelGrid, size: Vec3): Promise<GridToNbtR
       for (let x = 0; x < sx; x++) {
         const raw = grid[y][z][x]
         if (!raw) continue
-        const norm = normalizeBlockName(raw)
+        const norm = normalizeBlockName(voxelName(raw))
         if (!norm) continue
         if (!isVanillaBlock(norm)) {
           removed.set(norm, (removed.get(norm) ?? 0) + 1)
           continue
         }
-        entries.push({ pos: [x, y, z], state: getIndex(norm) })
+        entries.push({ pos: [x, y, z], state: getIndex(norm, voxelProps(raw)) })
       }
     }
   }
@@ -66,7 +67,11 @@ export async function gridToNbt(grid: VoxelGrid, size: Vec3): Promise<GridToNbtR
     const root = {
       DataVersion: 3953,
       size: [new Int32(rx), new Int32(ry), new Int32(rz)],
-      palette: palette.map((name) => ({ Name: name })),
+      palette: palette.map((entry) =>
+        Object.keys(entry.props).length
+          ? { Name: entry.name, Properties: { ...entry.props } }
+          : { Name: entry.name },
+      ),
       blocks: regionBlocks.map(({ pos, state }) => ({
         pos: [new Int32(pos[0] - ox), new Int32(pos[1] - oy), new Int32(pos[2] - oz)],
         state: new Int32(state),
@@ -79,7 +84,10 @@ export async function gridToNbt(grid: VoxelGrid, size: Vec3): Promise<GridToNbtR
 
   return {
     parts,
-    palette,
+    palette: palette.map((entry) => {
+      const props = Object.entries(entry.props).map(([k, v]) => k + '=' + v).join(',')
+      return props ? `${entry.name} [${props}]` : entry.name
+    }),
     totalBlocks: entries.length,
     removed: [...removed.entries()].map(([name, count]) => ({ name, count })),
     multiPart: parts.length > 1,
