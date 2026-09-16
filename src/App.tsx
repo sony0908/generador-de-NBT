@@ -1,205 +1,74 @@
 import { lazy, Suspense, useMemo, useRef, useState } from 'react'
-import { Boxes, Download, DraftingCompass, ImagePlus, ScanEye, Sparkles } from 'lucide-react'
-import {
-  GEMINI_MODELS,
-  PLAN_LABELS,
-  PLAN_NAMES,
-  diffGrids,
-  imageToPlans,
-  localPromptToPlans,
-  regeneratePlan,
-  validatePlanSet,
-  type PlanName,
-  type PlanSet,
-} from './ai/plans'
-import { fusePlanSet, scalePlanSet, SCALE_OPTIONS } from './voxel/fuse'
-import type { VoxelGrid } from './voxel/interpreter'
+import { Boxes, Download } from 'lucide-react'
+import { validateRecipe } from './ai/schema'
+import { interpretRecipe, countBlocks } from './voxel/interpreter'
 import { gridToNbt, placementGuide, type NbtPart } from './voxel/nbt'
 import { gridToViewer } from './voxel/viewer'
 import type { ViewerModel } from './generator/viewerTypes'
-import { PlanCard } from './components/PlanCard'
+import { compileBuilding } from './parametric/compiler'
+import { defaultBuilding, type Building } from './parametric/types'
+import { MassingStep } from './components/MassingStep'
+import { FloorsStep } from './components/FloorsStep'
+import { FacadeStep } from './components/FacadeStep'
+import { BaseRoofStep } from './components/BaseRoofStep'
 import './App.css'
-
-const SHOW_INTERIOR = false // Fase 2 (pisos/escaleras/luz/muebles) pospuesta por decisión del usuario.
 
 const MinecraftStructureViewer = lazy(async () => {
   const module = await import('./components/MinecraftStructureViewer')
   return { default: module.MinecraftStructureViewer }
 })
 
+const STEPS = ['Volumetría', 'Pisos', 'Fachada', 'Base y techo'] as const
+
 export default function App() {
-  const [tab, setTab] = useState<'image' | 'local'>('image')
-  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gennbt-gemini-key') || '')
-  const [geminiModel, setGeminiModel] = useState(() => localStorage.getItem('gennbt-gemini-model') || GEMINI_MODELS[0])
-  const [endpoint, setEndpoint] = useState('http://localhost:5001/v1')
-  const [localDesc, setLocalDesc] = useState('Una torre moderna blanca de 10 pisos con base comercial y corona abierta')
-  const [image, setImage] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
+  const [step, setStep] = useState(0)
+  const [building, setBuilding] = useState<Building>(defaultBuilding)
   const [viewerAssetFile, setViewerAssetFile] = useState<File | null>(null)
   const viewerAssetInputRef = useRef<HTMLInputElement>(null)
 
-  // Planos arquitectónicos (escala 1, tal como los dibujó la IA)
-  const [basePlans, setBasePlans] = useState<PlanSet | null>(null)
-  const [status, setStatus] = useState<Record<PlanName, boolean>>({ front: false, side: false, top: false })
-  const [attempts, setAttempts] = useState<Record<PlanName, number>>({ front: 1, side: 1, top: 1 })
-  const [scaleFactor, setScaleFactor] = useState<number>(1)
-
-  const [grid, setGrid] = useState<VoxelGrid | null>(null)
-  const [size, setSize] = useState<[number, number, number] | null>(null)
-  const [fuseInfo, setFuseInfo] = useState('')
   const [parts, setParts] = useState<NbtPart[]>([])
   const [palette, setPalette] = useState<string[]>([])
   const [removed, setRemoved] = useState<{ name: string; count: number }[]>([])
-
-  const [loading, setLoading] = useState(false)
-  const [regenBusy, setRegenBusy] = useState<PlanName | null>(null)
-  const [building, setBuilding] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  // Planos efectivos = base × escala determinista (la IA nunca escala).
-  const effective = useMemo(
-    () => (basePlans ? scalePlanSet(basePlans, scaleFactor) : null),
-    [basePlans, scaleFactor],
-  )
-  const effectiveValidation = useMemo(
-    () => (effective ? validatePlanSet(effective) : null),
-    [effective],
-  )
-  const allAccepted = PLAN_NAMES.every((p) => status[p])
-  const needsScale = !!basePlans && (basePlans.size[0] > 48 || basePlans.size[1] > 48 || basePlans.size[2] > 48)
+  const update = (patch: Partial<Building>) => {
+    setBuilding((b) => ({ ...b, ...patch }))
+    setParts([])
+  }
+
+  // Compilación en vivo: Building → shell_ops → grid → visor.
+  const compiled = useMemo(() => {
+    try {
+      const { recipe, warnings } = compileBuilding(building)
+      const validation = validateRecipe(recipe)
+      if (!validation.ok) return { ok: false as const, errors: validation.errors, warnings }
+      const { grid, size, errors } = interpretRecipe(recipe)
+      return { ok: true as const, grid, size, warnings: [...warnings, ...validation.warnings, ...errors] }
+    } catch (e) {
+      return { ok: false as const, errors: [e instanceof Error ? e.message : 'Diseño inválido.'], warnings: [] as string[] }
+    }
+  }, [building])
 
   const viewer: ViewerModel | null = useMemo(
-    () => (grid && size ? gridToViewer(grid, size) : null),
-    [grid, size],
+    () => (compiled.ok ? gridToViewer(compiled.grid, compiled.size) : null),
+    [compiled],
   )
 
-  const pickImage = (f: File | undefined) => {
-    if (!f) return
-    setImage(f)
-    const reader = new FileReader()
-    reader.onload = (e) => setPreview(e.target?.result as string)
-    reader.readAsDataURL(f)
-  }
-
-  const resetPlans = (ps: PlanSet) => {
-    setBasePlans(ps)
-    setStatus({ front: false, side: false, top: false })
-    setAttempts({ front: 1, side: 1, top: 1 })
-    setScaleFactor(1)
-    setGrid(null)
-    setSize(null)
-    setParts([])
-    setFuseInfo('')
-  }
-
-  const generatePlans = async () => {
-    setLoading(true)
-    setError('')
-    setNotice('')
-    setParts([])
-    try {
-      if (tab === 'image') {
-        if (!image) throw new Error('Sube primero la imagen de referencia.')
-        if (!geminiKey) throw new Error('Ingresa tu API Key de Gemini.')
-        localStorage.setItem('gennbt-gemini-key', geminiKey)
-        localStorage.setItem('gennbt-gemini-model', geminiModel)
-        const { planSet, warnings } = await imageToPlans({ apiKey: geminiKey, model: geminiModel, image })
-        resetPlans(planSet)
-        setNotice(
-          `Despiece listo: ${planSet.size.join('×')}. Revisa los 3 planos y acéptalos.` +
-            (warnings.length ? ' ' + warnings.join(' | ') : ''),
-        )
-      } else {
-        const { planSet, warnings } = await localPromptToPlans({ endpoint, description: localDesc })
-        resetPlans(planSet)
-        if (warnings.length) setNotice(warnings.join(' | '))
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Falló la generación.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleRegenerate = async (plan: PlanName, note: string) => {
-    if (!basePlans) return
-    setRegenBusy(plan)
-    setError('')
-    try {
-      const { planSet } = await regeneratePlan({
-        apiKey: geminiKey,
-        model: geminiModel,
-        image: tab === 'image' ? image : null,
-        current: basePlans,
-        plan,
-        userNote: note,
-      })
-      const changed = diffGrids(basePlans.plans[plan], planSet.plans[plan])
-      setBasePlans(planSet)
-      setStatus((s) => ({ ...s, [plan]: false }))
-      setAttempts((a) => ({ ...a, [plan]: a[plan] + 1 }))
-      setGrid(null)
-      setParts([])
-      setNotice(
-        changed >= 0
-          ? `Plano ${PLAN_LABELS[plan]} regenerado: ${changed} celdas distintas. Revísalo y acéptalo.`
-          : `Plano ${PLAN_LABELS[plan]} regenerado con otras dimensiones. Revísalo y acéptalo.`,
-      )
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo regenerar.')
-    } finally {
-      setRegenBusy(null)
-    }
-  }
-
-  const handleSaveEdit = (plan: PlanName, gridCells: string[][]) => {
-    if (!basePlans) return
-    const next: PlanSet = {
-      ...basePlans,
-      plans: { ...basePlans.plans, [plan]: { ...basePlans.plans[plan], grid: gridCells } },
-    }
-    const v = validatePlanSet(next)
-    if (!v.ok) {
-      setError('Edición inválida: ' + v.errors.slice(0, 3).join(' | '))
-      return
-    }
-    setBasePlans(next)
-    setStatus((s) => ({ ...s, [plan]: false }))
-    setGrid(null)
-    setParts([])
-    setNotice(`Plano ${PLAN_LABELS[plan]} editado a mano. Revísalo y acéptalo.`)
-  }
-
-  const build3D = () => {
-    if (!effective || !effectiveValidation?.ok) return
-    setBuilding(true)
-    setError('')
-    try {
-      const { grid: g, size: s, kept, carved, conflicts } = fusePlanSet(effective)
-      if (!kept) throw new Error('La fusión no produjo bloques (¿planos llenos de air?).')
-      setGrid(g)
-      setSize(s)
-      setParts([])
-      setFuseInfo(
-        `${kept} bloques conservados · ${carved} tallados · trasera espejada del frontal` +
-          (conflicts.length ? ` · ${conflicts.length} conflictos resueltos` : ''),
-      )
-      if (conflicts.length) setNotice(conflicts.slice(0, 5).join(' | '))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo fusionar.')
-    } finally {
-      setBuilding(false)
-    }
-  }
+  const summary = useMemo(() => {
+    if (!compiled.ok) return ''
+    const n = countBlocks(compiled.grid)
+    const [sx, sy, sz] = compiled.size
+    return `${sx}×${sy}×${sz} · ${building.volumes.length} volumen(es) · ${n.toLocaleString('es')} bloques`
+  }, [compiled, building.volumes.length])
 
   const exportNbt = async () => {
-    if (!grid || !size) return
+    if (!compiled.ok) return
     setExporting(true)
     setError('')
     try {
-      const result = await gridToNbt(grid, size)
+      const result = await gridToNbt(compiled.grid, compiled.size)
       setParts(result.parts)
       setPalette(result.palette)
       setRemoved(result.removed)
@@ -208,7 +77,7 @@ export default function App() {
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = result.parts.length > 1 ? `estructura_parte_${p.index}.nbt` : 'estructura.nbt'
+        a.download = result.parts.length > 1 ? `edificio_parte_${p.index}.nbt` : 'edificio.nbt'
         a.click()
         setTimeout(() => URL.revokeObjectURL(url), 5000)
       })
@@ -239,155 +108,69 @@ export default function App() {
         <div className="brand">
           <Boxes size={26} />
           <div>
-            <strong>Generador de NBT</strong>
-            <small>Foto → 3 planos → fusión 3D → NBT</small>
+            <strong>Generador de edificios</strong>
+            <small>Volumetría → pisos → fachada → base → NBT escalable</small>
           </div>
         </div>
-        <div className="tabs">
-          <button type="button" className={tab === 'image' ? 'active' : ''} onClick={() => setTab('image')}>
-            <ImagePlus size={15} /> Imagen (Gemini)
-          </button>
-          <button type="button" className={tab === 'local' ? 'active' : ''} onClick={() => setTab('local')}>
-            <Sparkles size={15} /> Texto (KoboldCpp)
-          </button>
+        <div className="wizard-steps">
+          {STEPS.map((s, i) => (
+            <button key={s} type="button" className={step === i ? 'on' : ''} onClick={() => setStep(i)}>
+              {i + 1} · {s}
+            </button>
+          ))}
         </div>
       </header>
 
       <main className="layout">
-        <section className="card">
-          <div className="card-head">
-            <span className="icon"><ScanEye size={20} /></span>
-            <div>
-              <span className="eyebrow">Paso 1 — Entrada</span>
-              <h2>{tab === 'image' ? 'Foto de referencia' : 'Descripción local'}</h2>
-              <p>La IA dibuja 3 planos ortográficos; la geometría 3D la construye el código.</p>
-            </div>
-          </div>
-          {tab === 'image' ? (
-            <>
-              <label className="field">
-                <span>API Key de Gemini (solo localStorage)</span>
-                <input type="password" value={geminiKey} onChange={(e) => setGeminiKey(e.target.value)} placeholder="AIzaSy…" />
-              </label>
-              <label className="field">
-                <span>Modelo gratuito</span>
-                <select value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)}>
-                  {GEMINI_MODELS.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="drop">
-                {preview ? (
-                  <div className="preview-wrap">
-                    <img src={preview} alt="Referencia" />
-                    <button type="button" className="ghost" onClick={() => { setImage(null); setPreview(null) }}>Cambiar imagen</button>
-                  </div>
-                ) : (
-                  <label className="drop-label">
-                    Sube la foto (Pinterest, captura…)
-                    <input type="file" accept="image/*" className="visually-hidden" onChange={(e) => pickImage(e.target.files?.[0])} />
-                  </label>
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              <label className="field">
-                <span>Endpoint KoboldCpp</span>
-                <input type="text" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
-              </label>
-              <label className="field">
-                <span>Descripción</span>
-                <textarea rows={3} value={localDesc} onChange={(e) => setLocalDesc(e.target.value)} />
-              </label>
-            </>
-          )}
-          <button className="primary" type="button" disabled={loading} onClick={generatePlans}>
-            {loading ? 'Dibujando planos…' : '1 · Generar los 3 planos'}
-          </button>
-          {error && <div className="alert err">{error}</div>}
-          {notice && <div className="alert ok">{notice}</div>}
-        </section>
-
         <section className="card span">
           <div className="card-head">
-            <span className="icon"><DraftingCompass size={20} /></span>
             <div>
-              <span className="eyebrow">Paso 2 — Planos (1 celda = 1 bloque)</span>
-              <h2>Revisa, regenera o edita · acepta los 3 para construir</h2>
-              <p>Trasera = espejo del frontal. La IA nunca escala: si hace falta, el escalado lo aplicas tú aquí.</p>
+              <span className="eyebrow">Paso {step + 1} de {STEPS.length}</span>
+              <h2>{STEPS[step]}</h2>
             </div>
           </div>
-          {!effective ? (
-            <div className="empty">Genera los planos para verlos aquí.</div>
-          ) : (
-            <>
-              <div className="scale-row">
-                <span>
-                  Tamaño {effective.size.join('×')}
-                  {needsScale && scaleFactor === 1 ? ' · supera 48: elige escala o exporta multi-NBT' : ''}
-                  {scaleFactor < 1 ? ` · escalado desde ${basePlans!.size.join('×')}` : ''}
-                </span>
-                <div className="seg">
-                  {SCALE_OPTIONS.map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      className={scaleFactor === f ? 'on' : ''}
-                      onClick={() => { setScaleFactor(f); setGrid(null); setParts([]) }}
-                    >
-                      {f === 1 ? '1:1' : `${Math.round(f * 100)}%`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {effectiveValidation && !effectiveValidation.ok && (
-                <div className="alert err">{effectiveValidation.errors.slice(0, 3).join(' | ')}</div>
-              )}
-              <div className="plans-grid">
-                {PLAN_NAMES.map((p) => (
-                  <PlanCard
-                    key={p + scaleFactor}
-                    name={p}
-                    planSet={effective}
-                    accepted={status[p]}
-                    attempts={attempts[p]}
-                    busy={regenBusy === p}
-                    onAccept={() => setStatus((s) => ({ ...s, [p]: !s[p] }))}
-                    onRegenerate={(note) => handleRegenerate(p, note)}
-                    onSaveEdit={(g) => handleSaveEdit(p, g)}
-                  />
-                ))}
-              </div>
-              <button
-                className="primary"
-                type="button"
-                disabled={!allAccepted || !effectiveValidation?.ok || building}
-                onClick={build3D}
-              >
-                {building ? 'Fusionando…' : allAccepted ? '2 · Construir 3D desde los planos' : `Acepta los 3 planos (${PLAN_NAMES.filter((p) => status[p]).length}/3)`}
+          {step === 0 && <MassingStep building={building} update={update} />}
+          {step === 1 && <FloorsStep building={building} update={update} />}
+          {step === 2 && <FacadeStep building={building} update={update} />}
+          {step === 3 && <BaseRoofStep building={building} update={update} />}
+          <div className="plan-buttons">
+            {step > 0 && (
+              <button type="button" className="ghost" onClick={() => setStep(step - 1)}>
+                ← Anterior
               </button>
-              {fuseInfo && <div className="alert ok">{fuseInfo}</div>}
-            </>
-          )}
+            )}
+            {step < STEPS.length - 1 && (
+              <button type="button" className="primary" onClick={() => setStep(step + 1)}>
+                Siguiente →
+              </button>
+            )}
+          </div>
         </section>
 
         <section className="card span">
           <div className="card-head">
             <span className="icon"><Boxes size={20} /></span>
             <div>
-              <span className="eyebrow">Paso 3 — Visor + exportar</span>
-              <h2>Previsualiza y descarga</h2>
-              <p>Si un eje supera 48 se exporta en partes con guía de colocación.</p>
+              <span className="eyebrow">Vista en vivo + exportar</span>
+              <h2>{summary || 'Diseño inválido'}</h2>
+              <p>Todo cambio recompila al instante. Si un eje supera 48 se exporta en partes.</p>
             </div>
           </div>
-          {viewer && viewer.states.length ? (
-            <Suspense fallback={<div className="empty">Cargando visor 3D…</div>}>
-              <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
-            </Suspense>
+          {!compiled.ok ? (
+            <div className="alert err">{compiled.errors.slice(0, 3).join(' | ')}</div>
           ) : (
-            <div className="empty">Acepta los 3 planos y construye para ver el 3D aquí.</div>
+            <>
+              {compiled.warnings.length > 0 && (
+                <div className="alert warn">{compiled.warnings.slice(0, 4).join(' | ')}</div>
+              )}
+              {viewer && viewer.states.length ? (
+                <Suspense fallback={<div className="empty">Cargando visor 3D…</div>}>
+                  <MinecraftStructureViewer model={viewer} theme="dark" assetFile={viewerAssetFile} />
+                </Suspense>
+              ) : (
+                <div className="empty">El diseño no produjo bloques visibles.</div>
+              )}
+            </>
           )}
           <div className="assets-row">
             <div className="assets-info">
@@ -429,14 +212,13 @@ export default function App() {
               ))}
             </div>
           )}
-          <button className="primary" type="button" disabled={!grid || exporting} onClick={exportNbt}>
-            <Download size={16} /> {exporting ? 'Exportando…' : '3 · Descargar .nbt'}
+          {error && <div className="alert err">{error}</div>}
+          {notice && <div className="alert ok">{notice}</div>}
+          <button className="primary" type="button" disabled={!compiled.ok || exporting} onClick={exportNbt}>
+            <Download size={16} /> {exporting ? 'Exportando…' : 'Descargar .nbt'}
           </button>
         </section>
       </main>
     </div>
   )
 }
-
-// Referencia para no perder el módulo pospuesto (tree-shaking lo ignora con el flag).
-void SHOW_INTERIOR

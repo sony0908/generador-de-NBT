@@ -38,18 +38,18 @@ function resolveBlock(raw: string, palette: Record<string, string>, errors: stri
   return norm
 }
 
-function windowCols(len: number, w: number, gap: number) {
+function windowCols(len: number, w: number, gap: number, off = 0) {
   const cols = new Set<number>()
   const period = w + gap
   const usable = len - 2
   if (usable <= 0 || period <= 0) return cols
   const fullWindows = Math.max(1, Math.floor((usable + gap) / period))
   const totalWin = fullWindows * w + (fullWindows - 1) * gap
-  let start = 1 + Math.max(0, Math.floor((usable - totalWin) / 2))
+  const start = 1 + Math.max(0, Math.floor((usable - totalWin) / 2))
   for (let k = 0; k < fullWindows; k++) {
     for (let i = 0; i < w; i++) {
       const c = start + k * period + i
-      if (c >= 1 && c < len - 1) cols.add(c)
+      if (c >= 1 && c < len - 1) cols.add(off + c)
     }
   }
   return cols
@@ -102,18 +102,32 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
     case 'grid_windows': {
       const block = resolveBlock(op.block, palette, errors, index)
       if (!block) return
-      const wx = windowCols(sx, op.w, op.gap)
-      const wz = windowCols(sz, op.w, op.gap)
-      const faces = op.face === 'all' ? (['front', 'back', 'left', 'right'] as const) : [op.face]
+      const faces = (Array.isArray(op.face) ? op.face : [op.face]) as Array<'front' | 'back' | 'left' | 'right'>
+      // Región opcional: permite pintar la fachada de un solo volumen.
+      // Por defecto cubre toda la estructura (comportamiento original).
+      const rx0 = op.x0 ?? 0
+      const rx1 = op.x1 ?? sx - 1
+      const rz0 = op.z0 ?? 0
+      const rz1 = op.z1 ?? sz - 1
+      // Columnas centradas en la región (volumen), no en toda la estructura.
+      const wx = windowCols(rx1 - rx0 + 1, op.w, op.gap, rx0)
+      const wz = windowCols(rz1 - rz0 + 1, op.w, op.gap, rz0)
       for (let y = op.y0; y <= op.y1; y++) {
         if (y < 0 || y >= sy) continue
         for (const face of faces) {
+          if (face !== 'front' && face !== 'back' && face !== 'left' && face !== 'right') continue
           if (face === 'front' || face === 'back') {
             const z = face === 'front' ? sz - 1 : 0
-            for (let x = 1; x < sx - 1; x++) if (wx.has(x)) set(x, y, z, block)
+            if (z < rz0 || z > rz1) continue
+            for (let x = Math.max(1, rx0); x <= Math.min(sx - 2, rx1); x++) {
+              if (wx.has(x)) set(x, y, z, block)
+            }
           } else {
             const x = face === 'right' ? sx - 1 : 0
-            for (let z = 1; z < sz - 1; z++) if (wz.has(z)) set(x, y, z, block)
+            if (x < rx0 || x > rx1) continue
+            for (let z = Math.max(1, rz0); z <= Math.min(sz - 2, rz1); z++) {
+              if (wz.has(z)) set(x, y, z, block)
+            }
           }
         }
       }
@@ -137,13 +151,19 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
     case 'roof_gable': {
       const block = resolveBlock(op.block, palette, errors, index)
       if (!block) return
-      // Techo a dos aguas simple sobre la capa y: reduce 1 por lado cada nivel.
+      // Techo a dos aguas: reduce 1 por lado cada nivel. Con región, solo ese volumen.
+      const [fx0, fz0] = op.from ?? [0, 0]
+      const [fx1, fz1] = op.to ?? [sx - 1, sz - 1]
+      const gx0 = Math.max(0, Math.min(fx0, fx1))
+      const gx1 = Math.min(sx - 1, Math.max(fx0, fx1))
+      const gz0 = Math.max(0, Math.min(fz0, fz1))
+      const gz1 = Math.min(sz - 1, Math.max(fz0, fz1))
       let inset = 0
       for (let y = op.y; y < sy; y++) {
-        const x0 = inset
-        const x1 = sx - 1 - inset
+        const x0 = gx0 + inset
+        const x1 = gx1 - inset
         if (x0 > x1) break
-        for (let z = 0; z < sz; z++) {
+        for (let z = gz0; z <= gz1; z++) {
           for (let x = x0; x <= x1; x++) set(x, y, z, block)
         }
         inset += 1

@@ -8,10 +8,23 @@ export type Face = 'front' | 'back' | 'left' | 'right' | 'all'
 export type ShellOp =
   | { op: 'box'; from: Vec3; to: Vec3; block: string; hollow?: boolean }
   | { op: 'floor_slab'; y: number; block: string; from?: [number, number]; to?: [number, number] }
-  | { op: 'grid_windows'; face: Face; y0: number; y1: number; w: number; gap: number; block: string }
+  | {
+      op: 'grid_windows'
+      face: Face | Face[]
+      y0: number
+      y1: number
+      w: number
+      gap: number
+      block: string
+      /** Región opcional (para fachadas por volumen). Sin ella se usa toda la cara. */
+      x0?: number
+      x1?: number
+      z0?: number
+      z1?: number
+    }
   | { op: 'column'; x: number; z: number; y0: number; y1: number; block: string }
   | { op: 'stairs_run'; from: Vec3; direction: '+x' | '-x' | '+z' | '-z'; steps: number; block: string }
-  | { op: 'roof_gable'; y: number; block: string }
+  | { op: 'roof_gable'; y: number; block: string; from?: [number, number]; to?: [number, number] }
   | { op: 'fill_sphere'; center: Vec3; radius: number; block: string; hollow?: boolean }
   | { op: 'mirror'; axis: 'x' | 'z' }
   | { op: 'replace'; from: Vec3; to: Vec3; find: string; block: string }

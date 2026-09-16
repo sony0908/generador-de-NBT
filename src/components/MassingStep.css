@@ -1,0 +1,77 @@
+.massing {
+  display: grid;
+  grid-template-columns: 200px 1fr 240px;
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .massing { grid-template-columns: 1fr; }
+}
+
+.massing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.massing-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #9aa7b5;
+}
+
+.vol-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f141b;
+  color: #c9d4e0;
+  border: 1px solid #2b3644;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+}
+
+.vol-item small {
+  margin-left: auto;
+  color: #7d8ea1;
+}
+
+.vol-item.on {
+  border-color: #58a6ff;
+  color: #fff;
+}
+
+.massing-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.massing-canvas {
+  border-radius: 8px;
+  cursor: grab;
+  max-width: 100%;
+}
+
+.massing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ghost.danger {
+  color: #ff9d9d;
+  border-color: rgba(220, 60, 60, 0.4);
+}
