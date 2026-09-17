@@ -1,7 +1,8 @@
 import type { Recipe, ShellOp, Vec3 } from '../ai/schema'
 import type { VoxelGrid } from '../voxel/interpreter'
-import type { Building, FacadeFaceName, Volume } from './types'
-import { FACADE_FACES } from './types'
+import type { Building, FacadeFaceName } from './types'
+import { FACADE_FACES, resolveFloorAt } from './types'
+import { solveShape, type SolvedBox } from './solver'
 
 export type CompileStats = {
   volumes: number
@@ -17,24 +18,21 @@ export type CompileResult = {
   stats: CompileStats
 }
 
+/** Tope técnico (memoria del navegador), no de diseño: 20M de celdas. */
+export const MAX_CELLS = 20_000_000
+
 type Box = { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number }
 
-function normVolume(v: Volume): Box {
-  const x0 = Math.min(v.from[0], v.to[0])
-  const x1 = Math.max(v.from[0], v.to[0])
-  const y0 = Math.min(v.from[1], v.to[1])
-  const y1 = Math.max(v.from[1], v.to[1])
-  const z0 = Math.min(v.from[2], v.to[2])
-  const z1 = Math.max(v.from[2], v.to[2])
-  for (const n of [x0, x1, y0, y1, z0, z1]) {
-    if (!Number.isInteger(n)) throw new Error(`Volumen "${v.name}": usa coordenadas enteras.`)
-    if (n < 0) throw new Error(`Volumen "${v.name}": no se permiten coordenadas negativas.`)
-  }
-  return { x0, y0, z0, x1, y1, z1 }
+// Caja de 1 bloque de grosor sobre una cara del volumen.
+function faceBox(v: Box, face: FacadeFaceName, yA: number, yB: number, block: string): ShellOp {
+  if (face === 'front') return { op: 'box', from: [v.x0, yA, v.z1], to: [v.x1, yB, v.z1], block }
+  if (face === 'back') return { op: 'box', from: [v.x0, yA, v.z0], to: [v.x1, yB, v.z0], block }
+  if (face === 'left') return { op: 'box', from: [v.x0, yA, v.z0], to: [v.x0, yB, v.z1], block }
+  return { op: 'box', from: [v.x1, yA, v.z0], to: [v.x1, yB, v.z1], block }
 }
 
-// ¿La cara F de V está tapada por otros volúmenes? (para no pintar ventanas al vacío interior)
-function buriedFraction(v: Box, face: FacadeFaceName, others: Box[], yA: number, yB: number) {
+// ¿La cara F de V está tapada por otros volúmenes? (sin ventanas al interior)
+function buriedFraction(v: SolvedBox, face: FacadeFaceName, others: SolvedBox[], yA: number, yB: number) {
   let faceArea = 0
   let covered = 0
   if (face === 'front' || face === 'back') {
@@ -65,57 +63,65 @@ function buriedFraction(v: Box, face: FacadeFaceName, others: Box[], yA: number,
   return faceArea > 0 ? covered / faceArea : 1
 }
 
-// Caja de 1 bloque de grosor sobre una cara del volumen.
-function faceBox(v: Box, face: FacadeFaceName, yA: number, yB: number, block: string): ShellOp {
-  if (face === 'front') return { op: 'box', from: [v.x0, yA, v.z1], to: [v.x1, yB, v.z1], block }
-  if (face === 'back') return { op: 'box', from: [v.x0, yA, v.z0], to: [v.x1, yB, v.z0], block }
-  if (face === 'left') return { op: 'box', from: [v.x0, yA, v.z0], to: [v.x0, yB, v.z1], block }
-  return { op: 'box', from: [v.x1, yA, v.z0], to: [v.x1, yB, v.z1], block }
-}
-
 export function compileBuilding(b: Building): CompileResult {
-  if (!b.volumes.length) throw new Error('Agrega al menos un volumen (cubo).')
-  const boxes = b.volumes.map(normVolume)
-  const warnings: string[] = []
+  const solved = solveShape(b)
+  const warnings: string[] = [...solved.warnings]
   const ops: ShellOp[] = []
   const usedBlocks = new Set<string>()
-
   const use = (id: string) => {
     usedBlocks.add(id)
     return id
   }
 
-  // Tamaño = bbox + expansión del techo.
+  const fh = b.floors.floorHeight
+  // La losa física la marca la cara frontal; el resto debe coincidir.
+  const floorAt = resolveFloorAt(b.facade.front.floorAt, fh)
+  for (const f of FACADE_FACES) {
+    if (Math.round(b.facade[f].floorAt) !== Math.round(b.facade.front.floorAt)) {
+      warnings.push(`Losa en fila ${floorAt} (la marca la cara frontal).`)
+      break
+    }
+  }
+
+  // Tamaño = bbox + expansión del techo. Sin topes de diseño.
   let sx = 0
   let sy = 0
   let sz = 0
-  const roofExtra = new Map<number, number>()
-  boxes.forEach((v, i) => {
+  const byId = new Map(b.volumes.map((v) => [v.id, v]))
+  const roofExtra = new Map<string, number>()
+  for (const v of solved.boxes) {
     const w = v.x1 - v.x0 + 1
+    const d = v.z1 - v.z0 + 1
+    const gableDir = byId.get(v.volId)?.gableDir ?? 'x'
     let extra = 0
     if (b.roof.style === 'flat_slab') extra = 2
-    else if (b.roof.style === 'open_frame') extra = b.roof.height
-    else extra = Math.ceil(w / 2) + 1
-    roofExtra.set(i, extra)
+    else if (b.roof.style === 'open_frame') extra = Math.max(1, Math.round(b.roof.height))
+    else extra = Math.ceil((gableDir === 'z' ? d : w) / 2) + 1
+    roofExtra.set(v.volId, extra)
     sx = Math.max(sx, v.x1 + 1)
     sy = Math.max(sy, v.y1 + 1 + extra)
     sz = Math.max(sz, v.z1 + 1)
-  })
-  if (sy > 384) throw new Error(`Altura total ${sy} excede el máximo de Minecraft (384). Baja pisos o volúmenes.`)
+  }
   const size: Vec3 = [sx, sy, sz]
+  if (sx * sy * sz > MAX_CELLS) {
+    throw new Error(
+      `Diseño de ${(sx * sy * sz).toLocaleString('es')} celdas: excede la memoria del navegador. Baja pisos o divide en varios edificios.`,
+    )
+  }
 
   let floorsBuilt = 0
 
-  boxes.forEach((v, vi) => {
-    const vol = b.volumes[vi]
+  for (const v of solved.boxes) {
     const w = v.x1 - v.x0 + 1
     const d = v.z1 - v.z0 + 1
-    const others = boxes.filter((_, i) => i !== vi)
-    const grounded = v.y0 === 0
-    const bh = grounded ? Math.min(Math.max(0, Math.round(b.base.height)), v.y1 - v.y0 + 1) : 0
+    const others = solved.boxes.filter((o) => o.volId !== v.volId)
+    const bh = v.grounded ? Math.min(Math.max(0, Math.round(b.base.height)), v.y1 - v.y0 + 1) : 0
 
-    // Cáscara base (se repinta por caras más abajo).
-    ops.push({ op: 'box', from: [v.x0, v.y0, v.z0], to: [v.x1, v.y1, v.z1], block: use(b.facade.front.wall), hollow: true })
+    // Cáscara SIN tapa superior (el techo la cubre; evita un piso macizo
+    // invisible y conserva la simetría vertical). El anillo perimetral
+    // superior lo pintan las caras. La base sí lleva placa (suelo).
+    const shellTop = v.y1 > v.y0 ? v.y1 - 1 : v.y1
+    ops.push({ op: 'box', from: [v.x0, v.y0, v.z0], to: [v.x1, shellTop, v.z1], block: use(b.facade.front.wall), hollow: true })
     for (const f of FACADE_FACES) {
       ops.push(faceBox(v, f, v.y0, v.y1, use(b.facade[f].wall)))
     }
@@ -130,7 +136,6 @@ export function compileBuilding(b: Building): CompileResult {
           return
         }
         if (b.base.style === 'pilotis') {
-          // Solo columnas en esquinas + arquitrabe superior.
           const corners: Array<[number, number]> =
             f === 'front' ? [[v.x0, v.z1], [v.x1, v.z1]]
             : f === 'back' ? [[v.x0, v.z0], [v.x1, v.z0]]
@@ -142,6 +147,7 @@ export function compileBuilding(b: Building): CompileResult {
           ops.push(faceBox(v, f, yB, yB, use(b.base.wall)))
           return
         }
+        // Puerta en la cara de entrada: segmentos laterales + dintel.
         const isEntrance = f === b.base.entranceFace
         const doorH = Math.min(3, bh)
         if (isEntrance && (b.base.style === 'entrance' || b.base.style === 'retail_glass')) {
@@ -164,7 +170,6 @@ export function compileBuilding(b: Building): CompileResult {
           if (b.base.style === 'retail_glass' && bh >= 3) {
             band(yA, yA, b.base.wall)
             band(yA + 1, Math.min(yA + doorH - 1, yB - 1), b.base.glass)
-            // Dintel sobre la puerta dentro de la banda de vidrio.
             seg(dx0, dx1, yA + doorH, yB - 1, b.base.glass)
             band(yB, yB, b.base.wall)
           } else {
@@ -173,13 +178,9 @@ export function compileBuilding(b: Building): CompileResult {
           }
           return
         }
-        // Sin puerta: pinta por bandas.
         if (b.base.style === 'retail_glass' && bh >= 3) {
           ops.push(faceBox(v, f, yA, yA, use(b.base.wall)))
-          if (yB - 1 >= yA + 1) {
-            const bandOp = faceBox(v, f, yA + 1, yB - 1, use(b.base.glass))
-            ops.push(bandOp)
-          }
+          if (yB - 1 >= yA + 1) ops.push(faceBox(v, f, yA + 1, yB - 1, use(b.base.glass)))
           ops.push(faceBox(v, f, yB, yB, use(b.base.wall)))
         } else {
           ops.push(faceBox(v, f, yA, yB, use(b.base.style === 'retail_glass' ? b.base.glass : b.base.wall)))
@@ -188,120 +189,115 @@ export function compileBuilding(b: Building): CompileResult {
       for (const f of FACADE_FACES) paintBaseFace(f)
     }
 
-    // Fuste: pisos + ventanas.
-    const shaftY0 = v.y0 + bh
-    const shaftY1 = v.y1
-    const shaftH = shaftY1 - shaftY0 + 1
-    const fh = b.floors.floorHeight
-    let actual = 0
-    if (shaftH >= fh && b.floors.count > 0) {
-      const fit = Math.floor(shaftH / fh)
-      actual = Math.min(b.floors.count, fit)
-      if (actual < b.floors.count) {
-        warnings.push(
-          `"${vol.name}": solo caben ${actual} de ${b.floors.count} pisos (fuste de ${shaftH}, piso de ${fh}). Agranda el volumen o baja el alto de piso.`,
-        )
+    // Fuste: pisos + ventanas (simetría vertical: antepecho espejado arriba).
+    const shaftY0 = v.shaftY0
+    const shaftY1 = v.shaftY1
+    const actual = v.volFloors
+    if (b.floors.slab) {
+      const inset = b.floors.inset && w >= 3 && d >= 3
+      if (b.floors.inset && (w < 3 || d < 3)) {
+        warnings.push(`"${v.name}": muy angosto para piso interior, se usa huella completa.`)
       }
-      if (b.floors.slab) {
-        // Piso solo interior (no toca el contorno) o huella completa.
-        const inset = b.floors.inset && w >= 3 && d >= 3
-        if (b.floors.inset && (w < 3 || d < 3)) {
-          warnings.push(`"${vol.name}": muy angosto para piso interior, se usa huella completa.`)
-        }
-        for (let f = 0; f < actual; f++) {
-          const slabY = shaftY0 + f * fh
-          ops.push({
-            op: 'floor_slab',
-            y: slabY,
-            block: use(b.floors.slabBlock),
-            from: inset ? [v.x0 + 1, v.z0 + 1] : [v.x0, v.z0],
-            to: inset ? [v.x1 - 1, v.z1 - 1] : [v.x1, v.z1],
-            // Losa ALTA: se puede pisar y poner bloques encima (piso funcional).
-            props: { type: 'top' },
-          })
-        }
-      }
-      // Ventanas por cara (frente+atrás comparten patrón X, laterales el Z).
-      const hPair = (['front', 'back'] as const).filter((f) => {
-        const face = b.facade[f]
-        if (face.pattern === 'solid') return false
-        if (w < 3) return false
-        if (buriedFraction(v, f, others, shaftY0, shaftY1) >= 0.7) {
-          warnings.push(`Cara ${f} de "${vol.name}" tapada por otro volumen: sin ventanas.`)
-          return false
-        }
-        return true
-      })
-      const vPair = (['left', 'right'] as const).filter((f) => {
-        const face = b.facade[f]
-        if (face.pattern === 'solid') return false
-        if (d < 3) return false
-        if (buriedFraction(v, f, others, shaftY0, shaftY1) >= 0.7) {
-          warnings.push(`Cara ${f} de "${vol.name}" tapada por otro volumen: sin ventanas.`)
-          return false
-        }
-        return true
-      })
-      // Solo agrupamos si comparten parámetros (mismo vidrio, w y gap).
-      const keyOf = (f: (typeof hPair)[number] | (typeof vPair)[number]) => {
-        const face = b.facade[f]
-        if (face.pattern === 'ribbon') return `r|${face.glass}|${face.sill}`
-        const custom = face.custom?.length ? JSON.stringify(face.custom) : ''
-        return `${face.windowW}|${face.gapX}|${face.glass}|${face.sill}|${custom}`
-      }
-      const pushGroup = (faces: Array<'front' | 'back' | 'left' | 'right'>) => {
-        if (!faces.length) return
-        const rep = b.facade[faces[0]]
-        const ribbon = rep.pattern === 'ribbon'
-        const custom = !ribbon && rep.custom?.length ? rep.custom : null
-        const region = { x0: v.x0, x1: v.x1, z0: v.z0, z1: v.z1 }
-        if (custom) {
-          ops.push({
-            op: 'custom_windows',
-            face: faces.length === 1 ? faces[0] : (faces as Array<'front' | 'back' | 'left' | 'right'>),
-            ...region,
-            shaftY0,
-            floors: actual,
-            floorH: fh,
-            sill: Math.min(rep.sill, fh - 1),
-            gap: Math.max(0, rep.gapX),
-            pattern: custom,
-            wall: use(rep.wall),
-            glass: use(rep.glass),
-          })
-          return
-        }
+      for (let f = 0; f < actual; f++) {
+        const slabY = shaftY0 + f * fh + floorAt
+        if (slabY > shaftY0 + (f + 1) * fh - 1) continue
         ops.push({
-          op: 'grid_windows',
-          face: faces.length === 1 ? faces[0] : (faces as Array<'front' | 'back' | 'left' | 'right'>),
-          y0: shaftY0 + Math.min(rep.sill, fh - 1),
-          y1: shaftY1,
-          w: ribbon ? 99 : Math.max(1, rep.windowW),
-          gap: ribbon ? 0 : Math.max(0, rep.gapX),
-          block: use(rep.glass),
-          ...region,
+          op: 'floor_slab',
+          y: slabY,
+          block: use(b.floors.slabBlock),
+          from: inset ? [v.x0 + 1, v.z0 + 1] : [v.x0, v.z0],
+          to: inset ? [v.x1 - 1, v.z1 - 1] : [v.x1, v.z1],
+          props: { type: 'top' },
         })
       }
-      // Agrupa frente+atrás si coinciden, si no por separado (rara vez).
-      const groupByKey = (faces: Array<'front' | 'back'> | Array<'left' | 'right'>) => {
-        const groups = new Map<string, typeof faces>()
-        for (const f of faces) {
-          const k = keyOf(f)
-          const g = groups.get(k)
-          if (g) (g as string[]).push(f)
-          else groups.set(k, [f] as unknown as typeof faces)
-        }
-        return [...groups.values()]
-      }
-      for (const g of groupByKey(hPair)) pushGroup(g as Array<'front' | 'back' | 'left' | 'right'>)
-      for (const g of groupByKey(vPair)) pushGroup(g as Array<'front' | 'back' | 'left' | 'right'>)
-      floorsBuilt += actual
-    } else if (b.floors.count > 0 && shaftH > 0) {
-      warnings.push(`"${vol.name}": fuste de ${shaftH} bloques, no cabe ni un piso de ${fh}.`)
     }
+    const hPair = (['front', 'back'] as const).filter((f) => {
+      const face = b.facade[f]
+      if (face.pattern === 'solid' || w < 3) return false
+      if (buriedFraction(v, f, others, shaftY0, shaftY1) >= 0.7) {
+        warnings.push(`Cara ${f} de "${v.name}" tapada por otro volumen: sin ventanas.`)
+        return false
+      }
+      return true
+    })
+    const vPair = (['left', 'right'] as const).filter((f) => {
+      const face = b.facade[f]
+      if (face.pattern === 'solid' || d < 3) return false
+      if (buriedFraction(v, f, others, shaftY0, shaftY1) >= 0.7) {
+        warnings.push(`Cara ${f} de "${v.name}" tapada por otro volumen: sin ventanas.`)
+        return false
+      }
+      return true
+    })
+    const keyOf = (f: (typeof hPair)[number] | (typeof vPair)[number]) => {
+      const face = b.facade[f]
+      if (face.pattern === 'ribbon') return `r|${face.glass}|${face.sill}`
+      const custom = face.custom?.length ? JSON.stringify(face.custom) : ''
+      return `${face.windowW}|${face.gapX}|${face.glass}|${face.sill}|${face.floorAt}|${custom}`
+    }
+    // Ventanas primero, losas después (la losa pisa su fila).
+    const pushGroup = (faces: Array<'front' | 'back' | 'left' | 'right'>) => {
+      if (!faces.length) return
+      const rep = b.facade[faces[0]]
+      const ribbon = rep.pattern === 'ribbon'
+      const sill = Math.min(Math.max(0, Math.round(rep.sill)), fh - 1)
+      const y0 = shaftY0 + sill
+      const y1 = shaftY1 - sill
+      if (y1 < y0) {
+        warnings.push(`"${v.name}": antepecho ${sill} no cabe en el fuste, cara sin ventanas.`)
+        return
+      }
+      const region = { x0: v.x0, x1: v.x1, z0: v.z0, z1: v.z1 }
+      const faceParam = faces.length === 1 ? faces[0] : (faces as Array<'front' | 'back' | 'left' | 'right'>)
+      const custom = !ribbon && rep.custom?.length ? rep.custom.slice(0, fh) : null
+      if (custom) {
+        const patH = custom.length
+        ops.push({
+          op: 'custom_windows',
+          face: faceParam,
+          ...region,
+          shaftY0,
+          floors: actual,
+          floorH: fh,
+          // Centrado vertical: simetría total del pixel-art en su banda.
+          sill: Math.max(0, Math.floor((fh - patH) / 2)),
+          gap: Math.max(0, Math.round(rep.gapX)),
+          pattern: custom,
+          wall: use(rep.wall),
+          glass: use(rep.glass),
+        })
+        return
+      }
+      ops.push({
+        op: 'grid_windows',
+        face: faceParam,
+        y0,
+        y1,
+        w: ribbon ? 99 : Math.max(1, Math.round(rep.windowW)),
+        gap: ribbon ? 0 : Math.max(0, Math.round(rep.gapX)),
+        block: use(rep.glass),
+        ...region,
+      })
+    }
+    const groupByKey = (faces: Array<'front' | 'back'> | Array<'left' | 'right'>) => {
+      const groups = new Map<string, typeof faces>()
+      for (const f of faces) {
+        const k = keyOf(f)
+        const g = groups.get(k)
+        if (g) (g as string[]).push(f)
+        else groups.set(k, [f] as unknown as typeof faces)
+      }
+      return [...groups.values()]
+    }
+    // Orden: losas y luego ventanas (con inset no se tocan; sin inset la
+    // ventana recorta la losa solo en sus columnas, como remate).
+    for (const g of groupByKey(hPair)) pushGroup(g as Array<'front' | 'back' | 'left' | 'right'>)
+    for (const g of groupByKey(vPair)) pushGroup(g as Array<'front' | 'back' | 'left' | 'right'>)
+    floorsBuilt += actual
 
     // Techo.
     const roofBase = v.y1 + 1
+    const gableDir = byId.get(v.volId)?.gableDir ?? 'x'
     if (b.roof.style === 'flat_slab') {
       ops.push({ op: 'floor_slab', y: roofBase, block: use(b.roof.slab), from: [v.x0, v.z0], to: [v.x1, v.z1], props: { type: 'top' } })
       for (const f of FACADE_FACES) {
@@ -317,14 +313,8 @@ export function compileBuilding(b: Building): CompileResult {
         ops.push(faceBox(v, f, roofBase + rh - 1, roofBase + rh - 1, use(b.roof.trim)))
       }
     } else {
-      ops.push({ op: 'roof_gable', y: roofBase, block: use(b.roof.trim), from: [v.x0, v.z0], to: [v.x1, v.z1] })
+      ops.push({ op: 'roof_gable', y: roofBase, block: use(b.roof.trim), from: [v.x0, v.z0], to: [v.x1, v.z1], axis: gableDir })
     }
-  })
-
-  if (ops.length > 120) {
-    throw new Error(
-      `El diseño genera ${ops.length} operaciones (máx 120). Baja pisos, quita volúmenes o usa losas más espaciadas.`,
-    )
   }
 
   const palette: Record<string, string> = {}
@@ -344,7 +334,7 @@ export function compileBuilding(b: Building): CompileResult {
   return {
     recipe,
     warnings,
-    stats: { volumes: boxes.length, floorsBuilt, floorsRequested: b.floors.count, ops: ops.length, size },
+    stats: { volumes: solved.boxes.length, floorsBuilt, floorsRequested: b.floors.count, ops: ops.length, size },
   }
 }
 

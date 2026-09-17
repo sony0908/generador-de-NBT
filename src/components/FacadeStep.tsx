@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Building, FacadeFace, FacadeFaceName, FacadePattern } from '../parametric/types'
-import { FACADE_FACES, FACADE_FACE_LABELS } from '../parametric/types'
+import { FACADE_FACES, FACADE_FACE_LABELS, resolveFloorAt } from '../parametric/types'
 import {
   BUILTIN_FACADE_TEMPLATES,
   deleteUserTemplate,
@@ -71,10 +71,14 @@ export function FacadeStep({ building, update }: Props) {
           <>
             <NumField label="Cantidad: ancho de ventana" value={current.windowW} min={1} max={8} onChange={(windowW) => setFacePatch({ windowW })} />
             <NumField label="Espacio entre ventanas" value={current.gapX} min={0} max={8} onChange={(gapX) => setFacePatch({ gapX })} />
+            <NumField label="Esquinas (margen simétrico)" value={current.margin} min={0} max={8} onChange={(margin) => setFacePatch({ margin })} />
           </>
         )}
         {current.pattern !== 'solid' && (
-          <NumField label="Altura de antepecho (filas de muro sobre la losa)" value={current.sill} min={0} max={4} onChange={(sill) => setFacePatch({ sill })} />
+          <>
+            <NumField label="Antepecho (se espeja arriba)" value={current.sill} min={0} max={4} onChange={(sill) => setFacePatch({ sill })} />
+            <NumField label="Fila de losa dentro del piso (-1 = centrada)" value={current.floorAt} min={-1} max={Math.max(0, building.floors.floorHeight - 1)} onChange={(floorAt) => setFacePatch({ floorAt })} />
+          </>
         )}
         <BlockField label="Muro" value={current.wall} onChange={(wall) => setFacePatch({ wall })} />
         {current.pattern !== 'solid' && (
@@ -162,8 +166,10 @@ function WindowPixelEditor({
 }) {
   const [brush, setBrush] = useState<PxCell>('G')
   const [painting, setPainting] = useState(false)
-  const rows = Math.max(1, Math.min(5, floorH - face.sill))
+  // Filas = alto de piso completo; la fila marcada es la losa (la pisa el piso).
+  const rows = Math.max(1, Math.min(6, floorH))
   const cols = Math.max(1, Math.min(8, face.windowW))
+  const slabRow = resolveFloorAt(face.floorAt, floorH)
 
   const grid: string[][] = []
   for (let y = 0; y < rows; y++) {
@@ -184,7 +190,7 @@ function WindowPixelEditor({
     return (
       <div className="px-wrap">
         <small className="ai-hint">
-          Ventana maciza de vidrio ({cols}×{rows}). Personalízala celda por celda:
+          Ventana maciza de vidrio ({cols}×{rows}, losa en fila {slabRow + 1}). Personalízala celda por celda:
         </small>
         <div className="plan-buttons">
           <button
@@ -202,7 +208,7 @@ function WindowPixelEditor({
   return (
     <div className="px-wrap">
       <small className="ai-hint">
-        Diseña la ventana ({cols}×{rows}): se repite en cada hueco de esta cara.
+        Diseña la ventana ({cols}×{rows}, fila {slabRow + 1} = losa): se repite en cada hueco de esta cara.
       </small>
       <div className="brush-row">
         {(['G', 'W', '.'] as const).map((b) => (
@@ -227,7 +233,7 @@ function WindowPixelEditor({
             <button
               key={x + '-' + y}
               type="button"
-              className={'px-cell px-' + (cell === 'G' || cell === 'W' ? cell : 'dot')}
+              className={'px-cell px-' + (cell === 'G' || cell === 'W' ? cell : 'dot') + (y === slabRow ? ' px-slabrow' : '')}
               onMouseDown={(e) => {
                 e.preventDefault()
                 setPainting(true)

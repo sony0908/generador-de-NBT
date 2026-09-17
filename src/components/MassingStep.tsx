@@ -14,6 +14,8 @@ function patchVolume(b: Building, id: string, patch: Partial<Volume>): Volume[] 
   return b.volumes.map((v) => (v.id === id ? { ...v, ...patch } : v))
 }
 
+// Volumetría = FORMA en tramos (proporción y adosamiento, no bloques).
+// Las medidas reales las dan Pisos (altura) y Fachada (ancho simétrico).
 export function MassingStep({ building, update }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [selected, setSelected] = useState<string>(building.volumes[0]?.id ?? '')
@@ -28,13 +30,13 @@ export function MassingStep({ building, update }: Props) {
     }
   }, [building.volumes, selected])
 
-  // Vista cenital 2D: cada cubo es un rectángulo arrastrable.
+  // Vista cenital 2D en tramos: cada cubo es un rectángulo arrastrable.
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const maxX = Math.max(8, ...building.volumes.map((v) => Math.max(v.from[0], v.to[0]) + 1))
-    const maxZ = Math.max(8, ...building.volumes.map((v) => Math.max(v.from[2], v.to[2]) + 1))
-    const cell = Math.max(6, Math.min(26, Math.floor(380 / Math.max(maxX, maxZ))))
+    const maxX = Math.max(8, ...building.volumes.map((v) => v.x + v.w))
+    const maxZ = Math.max(8, ...building.volumes.map((v) => v.z + v.d))
+    const cell = Math.max(10, Math.min(30, Math.floor(380 / Math.max(maxX, maxZ))))
     canvas.width = maxX * cell + 8
     canvas.height = maxZ * cell + 8
     const ctx = canvas.getContext('2d')
@@ -53,29 +55,22 @@ export function MassingStep({ building, update }: Props) {
     }
     ctx.stroke()
     building.volumes.forEach((v, i) => {
-      const x0 = Math.min(v.from[0], v.to[0])
-      const z0 = Math.min(v.from[2], v.to[2])
-      const w = Math.abs(v.to[0] - v.from[0]) + 1
-      const d = Math.abs(v.to[2] - v.from[2]) + 1
-      const h = Math.abs(v.to[1] - v.from[1]) + 1
       const isSel = v.id === (sel?.id ?? selected)
       ctx.fillStyle = isSel ? 'rgba(88,166,255,0.45)' : `rgba(88,166,255,${0.14 + (i % 4) * 0.05})`
-      ctx.fillRect(x0 * cell + 4, z0 * cell + 4, w * cell, d * cell)
+      ctx.fillRect(v.x * cell + 4, v.z * cell + 4, v.w * cell, v.d * cell)
       ctx.strokeStyle = isSel ? '#58a6ff' : 'rgba(140,190,240,0.5)'
       ctx.lineWidth = isSel ? 2 : 1
-      ctx.strokeRect(x0 * cell + 4, z0 * cell + 4, w * cell, d * cell)
+      ctx.strokeRect(v.x * cell + 4, v.z * cell + 4, v.w * cell, v.d * cell)
       ctx.fillStyle = '#dbe7f3'
-      ctx.font = `${Math.max(10, Math.min(13, cell - 4))}px system-ui`
-      ctx.fillText(`${v.name} · h${h}`, x0 * cell + 8, z0 * cell + 18)
+      ctx.font = `${Math.max(10, Math.min(13, cell - 2))}px system-ui`
+      ctx.fillText(`${v.name} · ${Math.round(v.hShare * 100)}%`, v.x * cell + 8, v.z * cell + 18)
     })
   }, [building.volumes, sel, selected])
 
   const cellOf = () => {
-    const canvas = canvasRef.current
-    if (!canvas) return 10
-    const maxX = Math.max(8, ...building.volumes.map((v) => Math.max(v.from[0], v.to[0]) + 1))
-    const maxZ = Math.max(8, ...building.volumes.map((v) => Math.max(v.from[2], v.to[2]) + 1))
-    return Math.max(6, Math.min(26, Math.floor(380 / Math.max(maxX, maxZ))))
+    const maxX = Math.max(8, ...building.volumes.map((v) => v.x + v.w))
+    const maxZ = Math.max(8, ...building.volumes.map((v) => v.z + v.d))
+    return Math.max(10, Math.min(30, Math.floor(380 / Math.max(maxX, maxZ))))
   }
 
   const posOf = (e: React.MouseEvent) => {
@@ -84,21 +79,17 @@ export function MassingStep({ building, update }: Props) {
     const cell = cellOf()
     const gx = Math.floor(((e.clientX - rect.left) * (canvas.width / rect.width) - 4) / cell)
     const gz = Math.floor(((e.clientY - rect.top) * (canvas.height / rect.height) - 4) / cell)
-    return { gx, gz, cell }
+    return { gx, gz }
   }
 
   const onDown = (e: React.MouseEvent) => {
     const { gx, gz } = posOf(e)
-    const hit = [...building.volumes].reverse().find((v) => {
-      const x0 = Math.min(v.from[0], v.to[0])
-      const x1 = Math.max(v.from[0], v.to[0])
-      const z0 = Math.min(v.from[2], v.to[2])
-      const z1 = Math.max(v.from[2], v.to[2])
-      return gx >= x0 && gx <= x1 && gz >= z0 && gz <= z1
-    })
+    const hit = [...building.volumes].reverse().find(
+      (v) => gx >= v.x && gx < v.x + v.w && gz >= v.z && gz < v.z + v.d,
+    )
     if (hit) {
       setSelected(hit.id)
-      dragOffset.current = { dx: gx - Math.min(hit.from[0], hit.to[0]), dz: gz - Math.min(hit.from[2], hit.to[2]) }
+      dragOffset.current = { dx: gx - hit.x, dz: gz - hit.z }
       setDragging(true)
     }
   }
@@ -106,14 +97,10 @@ export function MassingStep({ building, update }: Props) {
   const onMove = (e: React.MouseEvent) => {
     if (!dragging || !sel) return
     const { gx, gz } = posOf(e)
-    const w = Math.abs(sel.to[0] - sel.from[0])
-    const d = Math.abs(sel.to[2] - sel.from[2])
-    const nx0 = Math.max(0, gx - dragOffset.current.dx)
-    const nz0 = Math.max(0, gz - dragOffset.current.dz)
     update({
       volumes: patchVolume(building, sel.id, {
-        from: [nx0, sel.from[1], nz0],
-        to: [nx0 + w, sel.to[1], nz0 + d],
+        x: Math.max(0, gx - dragOffset.current.dx),
+        z: Math.max(0, gz - dragOffset.current.dz),
       }),
     })
   }
@@ -124,7 +111,7 @@ export function MassingStep({ building, update }: Props) {
     update({
       volumes: [
         ...building.volumes,
-        { id, name: `Anexo ${building.volumes.length + 1}`, from: [off, 0, 0], to: [off + 6, 11, 6] },
+        { id, name: `Anexo ${building.volumes.length + 1}`, x: off, z: 0, w: 4, d: 4, yShare: 0, hShare: 0.4, grounded: true, gableDir: 'x' },
       ],
     })
     setSelected(id)
@@ -134,10 +121,7 @@ export function MassingStep({ building, update }: Props) {
     if (!sel) return
     const id = newVolumeId()
     update({
-      volumes: [
-        ...building.volumes,
-        { ...sel, id, name: sel.name + ' copia', from: [sel.from[0] + 2, sel.from[1], sel.from[2]], to: [sel.to[0] + 2, sel.to[1], sel.to[2]] },
-      ],
+      volumes: [...building.volumes, { ...sel, id, name: sel.name + ' copia', x: sel.x + 1 }],
     })
     setSelected(id)
   }
@@ -150,7 +134,8 @@ export function MassingStep({ building, update }: Props) {
           <button type="button" className="ghost" onClick={addVolume}>
             <Plus size={14} /> Cubo
           </button>
-        </div>        {building.volumes.map((v) => (
+        </div>
+        {building.volumes.map((v) => (
           <button
             key={v.id}
             type="button"
@@ -158,9 +143,7 @@ export function MassingStep({ building, update }: Props) {
             onClick={() => setSelected(v.id)}
           >
             <Cuboid size={14} /> {v.name}
-            <small>
-              {Math.abs(v.to[0] - v.from[0]) + 1}×{Math.abs(v.to[1] - v.from[1]) + 1}×{Math.abs(v.to[2] - v.from[2]) + 1}
-            </small>
+            <small>{v.w}×{v.d} · {Math.round(v.hShare * 100)}%</small>
           </button>
         ))}
         <label className="toggle union-toggle">
@@ -182,7 +165,7 @@ export function MassingStep({ building, update }: Props) {
           onMouseUp={() => setDragging(false)}
           onMouseLeave={() => setDragging(false)}
         />
-        <small className="ai-hint">Clic para seleccionar · arrastra para mover</small>
+        <small className="ai-hint">Tramos = forma, no bloques. Clic para seleccionar · arrastra para mover.</small>
       </div>
 
       {sel && (
@@ -192,31 +175,28 @@ export function MassingStep({ building, update }: Props) {
             <input type="text" value={sel.name} onChange={(e) => update({ volumes: patchVolume(building, sel.id, { name: e.target.value }) })} />
           </label>
           <div className="grid2">
-            <NumField label="X" value={Math.min(sel.from[0], sel.to[0])} min={0} max={64} onChange={(n) => {
-              const w = Math.abs(sel.to[0] - sel.from[0])
-              update({ volumes: patchVolume(building, sel.id, { from: [n, sel.from[1], sel.from[2]], to: [n + w, sel.to[1], sel.to[2]] }) })
-            }} />
-            <NumField label="Z" value={Math.min(sel.from[2], sel.to[2])} min={0} max={64} onChange={(n) => {
-              const d = Math.abs(sel.to[2] - sel.from[2])
-              update({ volumes: patchVolume(building, sel.id, { from: [sel.from[0], sel.from[1], n], to: [sel.to[0], sel.to[1], n + d] }) })
-            }} />
-            <NumField label="Ancho" value={Math.abs(sel.to[0] - sel.from[0]) + 1} min={1} max={64} onChange={(n) => {
-              const x0 = Math.min(sel.from[0], sel.to[0])
-              update({ volumes: patchVolume(building, sel.id, { from: [x0, sel.from[1], sel.from[2]], to: [x0 + n - 1, sel.to[1], sel.to[2]] }) })
-            }} />
-            <NumField label="Fondo" value={Math.abs(sel.to[2] - sel.from[2]) + 1} min={1} max={64} onChange={(n) => {
-              const z0 = Math.min(sel.from[2], sel.to[2])
-              update({ volumes: patchVolume(building, sel.id, { from: [sel.from[0], sel.from[1], z0], to: [sel.to[0], sel.to[1], z0 + n - 1] }) })
-            }} />
-            <NumField label="Base Y" value={Math.min(sel.from[1], sel.to[1])} min={0} max={320} onChange={(n) => {
-              const h = Math.abs(sel.to[1] - sel.from[1])
-              update({ volumes: patchVolume(building, sel.id, { from: [sel.from[0], n, sel.from[2]], to: [sel.to[0], n + h, sel.to[2]] }) })
-            }} />
-            <NumField label="Alto" value={Math.abs(sel.to[1] - sel.from[1]) + 1} min={1} max={384} onChange={(n) => {
-              const y0 = Math.min(sel.from[1], sel.to[1])
-              update({ volumes: patchVolume(building, sel.id, { from: [sel.from[0], y0, sel.from[2]], to: [sel.to[0], y0 + n - 1, sel.to[2]] }) })
-            }} />
+            <NumField label="X (tramos)" value={sel.x} min={0} max={4096} onChange={(x) => update({ volumes: patchVolume(building, sel.id, { x }) })} />
+            <NumField label="Z (tramos)" value={sel.z} min={0} max={4096} onChange={(z) => update({ volumes: patchVolume(building, sel.id, { z }) })} />
+            <NumField label="Ancho (tramos)" value={sel.w} min={1} max={4096} onChange={(w) => update({ volumes: patchVolume(building, sel.id, { w }) })} />
+            <NumField label="Fondo (tramos)" value={sel.d} min={1} max={4096} onChange={(d) => update({ volumes: patchVolume(building, sel.id, { d }) })} />
+            <NumField label="Altura (% del fuste)" value={Math.round(sel.hShare * 100)} min={5} max={100} onChange={(n) => update({ volumes: patchVolume(building, sel.id, { hShare: n / 100 }) })} />
+            <NumField label="Inicio (% del fuste)" value={Math.round(sel.yShare * 100)} min={0} max={100} onChange={(n) => update({ volumes: patchVolume(building, sel.id, { yShare: n / 100 }) })} />
           </div>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={sel.grounded}
+              onChange={() => update({ volumes: patchVolume(building, sel.id, { grounded: !sel.grounded }) })}
+            />
+            Nace del suelo
+          </label>
+          <label className="field">
+            <span>Cumbrera dos aguas</span>
+            <select value={sel.gableDir} onChange={(e) => update({ volumes: patchVolume(building, sel.id, { gableDir: e.target.value as 'x' | 'z' }) })}>
+              <option value="x">Eje X (reduce a los lados)</option>
+              <option value="z">Eje Z (reduce al frente/fondo)</option>
+            </select>
+          </label>
           <div className="plan-buttons">
             <button type="button" className="ghost" onClick={duplicateSelected}>
               <Copy size={14} /> Duplicar

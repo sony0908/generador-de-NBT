@@ -1,4 +1,5 @@
 import type { BaseStyle, Building, RoofStyle } from '../parametric/types'
+import { BASE_COMBOS, ROOF_COMBOS } from '../parametric/templates'
 import { BASE_STYLES, FACADE_FACE_LABELS, FACADE_FACES, ROOF_STYLES } from '../parametric/types'
 import { BlockField, NumField } from './BlockField'
 
@@ -12,6 +13,21 @@ export function BaseRoofStep({ building, update }: Props) {
   const r = building.roof
   return (
     <div>
+      <h4 className="subhead">Combinaciones listas</h4>
+      <div className="tpl-grid">
+        {BASE_COMBOS.map((c) => (
+          <div key={c.name} className="tpl-card">
+            <strong>{c.name}</strong>
+            <small>{c.spec.wall} + {c.spec.glass}</small>
+            <div className="plan-buttons">
+              <button type="button" className="ghost" onClick={() => update({ base: { ...b, ...c.spec } })}>
+                Aplicar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
       <h4 className="subhead">Base / primer piso</h4>
       <div className="step-grid">
         <NumField label="Altura de la base" value={b.height} min={0} max={8} onChange={(height) => update({ base: { ...b, height } })} />
@@ -38,6 +54,21 @@ export function BaseRoofStep({ building, update }: Props) {
             <NumField label="Ancho de entrada" value={b.entranceW} min={1} max={9} onChange={(entranceW) => update({ base: { ...b, entranceW } })} />
           </>
         )}
+      </div>
+
+      <h4 className="subhead">Combinaciones listas</h4>
+      <div className="tpl-grid">
+        {ROOF_COMBOS.map((c) => (
+          <div key={c.name} className="tpl-card">
+            <strong>{c.name}</strong>
+            <small>{c.spec.trim} + {c.spec.slab}</small>
+            <div className="plan-buttons">
+              <button type="button" className="ghost" onClick={() => update({ roof: { ...r, ...c.spec } })}>
+                Aplicar
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       <h4 className="subhead">Techo / corona</h4>

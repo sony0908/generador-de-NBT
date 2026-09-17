@@ -48,7 +48,7 @@ export type ShellOp =
     }
   | { op: 'column'; x: number; z: number; y0: number; y1: number; block: string }
   | { op: 'stairs_run'; from: Vec3; direction: '+x' | '-x' | '+z' | '-z'; steps: number; block: string }
-  | { op: 'roof_gable'; y: number; block: string; from?: [number, number]; to?: [number, number] }
+  | { op: 'roof_gable'; y: number; block: string; from?: [number, number]; to?: [number, number]; axis?: 'x' | 'z' }
   | { op: 'fill_sphere'; center: Vec3; radius: number; block: string; hollow?: boolean }
   | { op: 'mirror'; axis: 'x' | 'z' }
   | { op: 'replace'; from: Vec3; to: Vec3; find: string; block: string }
@@ -90,13 +90,13 @@ export function validateRecipe(r: unknown): RecipeValidation {
   if (!checkVec3(recipe.size, 'size', errors)) return { ok: false, errors, warnings }
   const [sx, sy, sz] = recipe.size as Vec3
   if (sx < 1 || sy < 1 || sz < 1) errors.push('"size" debe ser mayor a 0 en cada eje.')
-  if (sy > 384) errors.push(`Altura ${sy} excede el máximo de Minecraft (384).`)
+  // Sin topes de diseño: se permiten construcciones gigantes. Solo se avisa
+  // del límite real del bloque de estructuras (48 por eje → multi-NBT).
   if (sx > 48 || sy > 48 || sz > 48) {
     warnings.push(`Tamaño ${sx}x${sy}x${sz}: supera 48 en un eje → se exportará en partes (multi-NBT) con guía de colocación.`)
   }
   if (!recipe.palette || typeof recipe.palette !== 'object') errors.push('"palette" debe ser un objeto {alias: "minecraft:id"}.')
   if (!Array.isArray(recipe.shell_ops)) errors.push('"shell_ops" debe ser un arreglo de operaciones.')
-  else if (recipe.shell_ops.length > 120) errors.push('Demasiadas operaciones (máx 120 en shell_ops).')
   if (recipe.interior_ops !== undefined && !Array.isArray(recipe.interior_ops)) errors.push('"interior_ops" debe ser un arreglo.')
 
   // Chequeo de coordenadas dentro de size

@@ -287,6 +287,7 @@ html, body, #root { height: 100%; }
 .px-G { background: #79b7c9; }
 .px-W { background: #9aa1ad; }
 .px-dot { background: #0b0f14; border-style: dashed; }
+.px-slabrow { outline: 2px solid #e8b93e; outline-offset: -2px; }
 .px-brush-G.on { border-color: #79b7c9; }
 .px-brush-W.on { border-color: #9aa1ad; }
 .px-brush-dot.on { border-color: #58a6ff; }

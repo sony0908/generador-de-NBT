@@ -10,7 +10,7 @@ export function FloorsStep({ building, update }: Props) {
   const f = building.floors
   return (
     <div className="step-grid">
-      <NumField label="Cantidad de pisos" value={f.count} min={1} max={60} onChange={(count) => update({ floors: { ...f, count } })} />
+      <NumField label="Cantidad de pisos" value={f.count} min={1} max={1000} onChange={(count) => update({ floors: { ...f, count } })} />
       <label className="field">
         <span>Espacio entre pisos (alto de cada piso)</span>
         <select value={f.floorHeight} onChange={(e) => update({ floors: { ...f, floorHeight: Number(e.target.value) as 2 | 3 | 4 | 5 } })}>
@@ -34,7 +34,8 @@ export function FloorsStep({ building, update }: Props) {
         </>
       )}
       <small className="ai-hint">
-        Si los pisos pedidos no caben en un volumen, se construyen los que quepan y se avisa cuántos faltan.
+        Los pisos dan la altura: cada volumen se ajusta a pisos enteros conservando su forma.
+        Si los pisos pedidos no caben en un volumen se construyen los que quepan y se avisa.
       </small>
     </div>
   )

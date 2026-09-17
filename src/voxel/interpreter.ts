@@ -228,20 +228,30 @@ function applyShellOp(grid: VoxelGrid, size: Vec3, palette: Record<string, strin
     case 'roof_gable': {
       const block = resolveBlock(op.block, palette, errors, index)
       if (!block) return
-      // Techo a dos aguas: reduce 1 por lado cada nivel. Con región, solo ese volumen.
+      // Techo a dos aguas: reduce 1 por lado cada nivel, cumbrera según axis.
       const [fx0, fz0] = op.from ?? [0, 0]
       const [fx1, fz1] = op.to ?? [sx - 1, sz - 1]
       const gx0 = Math.max(0, Math.min(fx0, fx1))
       const gx1 = Math.min(sx - 1, Math.max(fx0, fx1))
       const gz0 = Math.max(0, Math.min(fz0, fz1))
       const gz1 = Math.min(sz - 1, Math.max(fz0, fz1))
+      const alongZ = op.axis === 'z'
       let inset = 0
       for (let y = op.y; y < sy; y++) {
-        const x0 = gx0 + inset
-        const x1 = gx1 - inset
-        if (x0 > x1) break
-        for (let z = gz0; z <= gz1; z++) {
-          for (let x = x0; x <= x1; x++) set(x, y, z, block)
+        if (alongZ) {
+          const z0 = gz0 + inset
+          const z1 = gz1 - inset
+          if (z0 > z1) break
+          for (let z = z0; z <= z1; z++) {
+            for (let x = gx0; x <= gx1; x++) set(x, y, z, block)
+          }
+        } else {
+          const x0 = gx0 + inset
+          const x1 = gx1 - inset
+          if (x0 > x1) break
+          for (let z = gz0; z <= gz1; z++) {
+            for (let x = x0; x <= x1; x++) set(x, y, z, block)
+          }
         }
         inset += 1
       }
